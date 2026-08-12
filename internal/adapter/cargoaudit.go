@@ -21,14 +21,25 @@ type cargoAuditOutput struct {
 	Vulnerabilities struct {
 		List []struct {
 			Advisory struct {
-				ID    string `json:"id"`
-				Title string `json:"title"`
+				ID            string `json:"id"`
+				Title         string `json:"title"`
+				Informational string `json:"informational"`
 			} `json:"advisory"`
 			Package struct {
 				Name string `json:"name"`
 			} `json:"package"`
 		} `json:"list"`
 	} `json:"vulnerabilities"`
+}
+
+// cargoAuditSeverity maps RustSec's advisory.informational field to a
+// normalized severity. Empty/absent means an actual vulnerability (not an
+// informational notice), which maps to high.
+var cargoAuditSeverity = map[string]finding.Severity{
+	"":             finding.SeverityHigh,
+	"unmaintained": finding.SeverityLow,
+	"unsound":      finding.SeverityMedium,
+	"notice":       finding.SeverityLow,
 }
 
 func (CargoAudit) Run(path string) ([]finding.Finding, error) {

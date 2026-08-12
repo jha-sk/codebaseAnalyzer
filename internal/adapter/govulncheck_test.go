@@ -30,4 +30,9 @@ func TestGovulncheck_parse(t *testing.T) {
 	if f.Message != "Denial of service via crafted input" {
 		t.Errorf("message = %q", f.Message)
 	}
+	for _, got := range findings {
+		if got.RuleID == "GO-2023-5678" {
+			t.Errorf("unreachable module-level finding GO-2023-5678 should be filtered out, got %+v", got)
+		}
+	}
 }

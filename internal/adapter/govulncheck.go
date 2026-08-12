@@ -88,9 +88,14 @@ func govulncheckFindings(r io.Reader) ([]finding.Finding, error) {
 				reachable = true
 			}
 		}
-		severity := finding.SeverityHigh
-		if reachable {
-			severity = finding.SeverityCritical
+		// Spec: govulncheck is call-graph aware and should only flag reachable
+		// vulnerabilities. A trace with no named function is a module-level
+		// finding (the vulnerable dependency exists but is never called) —
+		// skip it. Err toward keeping: any named function anywhere in the
+		// trace counts as reachable, since a false negative here (dropping a
+		// truly reachable vuln) is worse than a false positive.
+		if !reachable {
+			continue
 		}
 		findings = append(findings, finding.Finding{
 			File:     file,
@@ -98,7 +103,7 @@ func govulncheckFindings(r io.Reader) ([]finding.Finding, error) {
 			Tool:     "govulncheck",
 			RuleID:   f.OSV,
 			Category: finding.CategorySecurity,
-			Severity: severity,
+			Severity: finding.SeverityCritical,
 			Message:  osvSummaries[f.OSV],
 		})
 	}
