@@ -19,8 +19,8 @@ func TestGosec_parse(t *testing.T) {
 	}
 	findings := gosecFindings(parsed)
 
-	if len(findings) != 2 {
-		t.Fatalf("got %d findings, want 2", len(findings))
+	if len(findings) != 3 {
+		t.Fatalf("got %d findings, want 3", len(findings))
 	}
 	if findings[0].Severity != finding.SeverityCritical || findings[0].Category != finding.CategorySecurity {
 		t.Errorf("finding[0] = %+v", findings[0])
@@ -30,5 +30,8 @@ func TestGosec_parse(t *testing.T) {
 	}
 	if findings[1].Severity != finding.SeverityMedium {
 		t.Errorf("finding[1].Severity = %v, want medium", findings[1].Severity)
+	}
+	if findings[2].Severity != finding.SeverityMedium {
+		t.Errorf("finding[2].Severity = %v, want medium (unrecognized severity %q falls back)", findings[2].Severity, "CRITICAL")
 	}
 }

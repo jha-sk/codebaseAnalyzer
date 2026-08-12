@@ -57,15 +57,23 @@ func (CargoAudit) Run(path string) ([]finding.Finding, error) {
 func cargoAuditFindings(parsed cargoAuditOutput) []finding.Finding {
 	findings := make([]finding.Finding, 0, len(parsed.Vulnerabilities.List))
 	for _, v := range parsed.Vulnerabilities.List {
-		// ponytail: cargo-audit's JSON doesn't reliably carry a severity level;
-		// every known-CVE dependency defaults to "high" until a CVSS parser is added.
+		// ponytail: severity derives only from advisory.informational, not the
+		// CVSS vector string (RustSec's cvss field is "CVSS:3.1/AV:N/...", not
+		// a score — honest support means implementing base-score computation).
+		// Ceiling: two real vulnerabilities differing by CVSS score still both
+		// land on "high". Upgrade path: parse cvss and compute the base score
+		// if gating on that granularity proves necessary.
+		severity, ok := cargoAuditSeverity[v.Advisory.Informational]
+		if !ok {
+			severity = finding.SeverityMedium
+		}
 		findings = append(findings, finding.Finding{
 			File:     "Cargo.lock",
 			Line:     0,
 			Tool:     "cargo-audit",
 			RuleID:   v.Advisory.ID,
 			Category: finding.CategorySecurity,
-			Severity: finding.SeverityHigh,
+			Severity: severity,
 			Message:  fmt.Sprintf("%s (%s)", v.Advisory.Title, v.Package.Name),
 		})
 	}

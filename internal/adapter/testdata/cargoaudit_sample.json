@@ -5,6 +5,14 @@
       {
         "advisory": {"id": "RUSTSEC-2021-0001", "title": "Use-after-free in vulnerable-crate"},
         "package": {"name": "vulnerable-crate"}
+      },
+      {
+        "advisory": {"id": "RUSTSEC-2022-0002", "title": "unmaintained-crate is unmaintained", "informational": "unmaintained"},
+        "package": {"name": "unmaintained-crate"}
+      },
+      {
+        "advisory": {"id": "RUSTSEC-2023-0003", "title": "weird-crate has an odd informational value", "informational": "something-unrecognized"},
+        "package": {"name": "weird-crate"}
       }
     ]
   }

@@ -15,6 +15,14 @@
       "details": "Errors unhandled",
       "file": "bad.go",
       "line": "8-9"
+    },
+    {
+      "severity": "CRITICAL",
+      "confidence": "HIGH",
+      "rule_id": "G999",
+      "details": "Unrecognized severity should fall back to medium",
+      "file": "bad.go",
+      "line": "12"
     }
   ]
 }

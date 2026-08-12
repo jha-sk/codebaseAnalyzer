@@ -19,8 +19,8 @@ func TestCargoAudit_parse(t *testing.T) {
 	}
 	findings := cargoAuditFindings(parsed)
 
-	if len(findings) != 1 {
-		t.Fatalf("got %d findings, want 1", len(findings))
+	if len(findings) != 3 {
+		t.Fatalf("got %d findings, want 3", len(findings))
 	}
 	f := findings[0]
 	if f.RuleID != "RUSTSEC-2021-0001" || f.File != "Cargo.lock" {
@@ -28,5 +28,15 @@ func TestCargoAudit_parse(t *testing.T) {
 	}
 	if f.Category != finding.CategorySecurity || f.Severity != finding.SeverityHigh {
 		t.Errorf("category/severity = %v/%v", f.Category, f.Severity)
+	}
+
+	unmaintained := findings[1]
+	if unmaintained.RuleID != "RUSTSEC-2022-0002" || unmaintained.Severity != finding.SeverityLow {
+		t.Errorf("finding[1] = %+v, want RUSTSEC-2022-0002/low (informational: unmaintained)", unmaintained)
+	}
+
+	unrecognized := findings[2]
+	if unrecognized.RuleID != "RUSTSEC-2023-0003" || unrecognized.Severity != finding.SeverityMedium {
+		t.Errorf("finding[2] = %+v, want RUSTSEC-2023-0003/medium (unrecognized informational falls back to medium)", unrecognized)
 	}
 }
