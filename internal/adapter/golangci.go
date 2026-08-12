@@ -59,8 +59,21 @@ var concurrencyRules = map[string]bool{
 	"SA2002": true, // called testing.T.FailNow from a goroutine
 }
 
+// Targets golangci-lint v2 only (--out-format was a v1 flag, removed in v2;
+// v2 replaces it with per-format --output.*.path flags). v2 also always
+// writes a human-readable summary to stdout unless told otherwise
+// (--show-stats defaults to true and a text formatter also defaults to
+// stdout), which would otherwise land after the JSON object on the same
+// stream and break json.Unmarshal ("invalid character ... after top-level
+// value") - so both are redirected away from stdout, leaving stdout as pure
+// JSON. Confirmed against a real v2.12.2 run that the Issues/FromLinter/
+// Text/Pos.Filename/Pos.Line shape below still matches; no v1 support is
+// attempted.
 func (GolangciLint) Run(path string) ([]finding.Finding, error) {
-	out, err := runCommand(path, "golangci-lint", "run", "--out-format", "json",
+	out, err := runCommand(path, "golangci-lint", "run",
+		"--output.json.path", "stdout",
+		"--output.text.path", "stderr",
+		"--show-stats=false",
 		"--enable", "govet,errcheck,staticcheck,contextcheck,bodyclose,noctx")
 	if err != nil {
 		return nil, fmt.Errorf("golangci-lint: %w", err)
