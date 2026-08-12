@@ -1,0 +1,20 @@
+{
+  "Issues": [
+    {
+      "severity": "HIGH",
+      "confidence": "HIGH",
+      "rule_id": "G101",
+      "details": "Potential hardcoded credentials",
+      "file": "bad.go",
+      "line": "6"
+    },
+    {
+      "severity": "LOW",
+      "confidence": "MEDIUM",
+      "rule_id": "G104",
+      "details": "Errors unhandled",
+      "file": "bad.go",
+      "line": "8-9"
+    }
+  ]
+}

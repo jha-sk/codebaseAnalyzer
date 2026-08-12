@@ -1,0 +1,11 @@
+{
+  "vulnerabilities": {
+    "found": true,
+    "list": [
+      {
+        "advisory": {"id": "RUSTSEC-2021-0001", "title": "Use-after-free in vulnerable-crate"},
+        "package": {"name": "vulnerable-crate"}
+      }
+    ]
+  }
+}

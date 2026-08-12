@@ -1,0 +1,29 @@
+{
+  "Issues": [
+    {
+      "FromLinter": "errcheck",
+      "Text": "Error return value of `os.Open` is not checked",
+      "Pos": {"Filename": "bad.go", "Line": 8, "Column": 2}
+    },
+    {
+      "FromLinter": "staticcheck",
+      "Text": "SA2001: empty critical section, did you mean to defer the unlock?",
+      "Pos": {"Filename": "worker.go", "Line": 21, "Column": 3}
+    },
+    {
+      "FromLinter": "govet",
+      "Text": "call of worker copies lock value: sync.Mutex contains sync.noCopy",
+      "Pos": {"Filename": "pool.go", "Line": 15, "Column": 4}
+    },
+    {
+      "FromLinter": "bodyclose",
+      "Text": "response body must be closed",
+      "Pos": {"Filename": "client.go", "Line": 30, "Column": 5}
+    },
+    {
+      "FromLinter": "gocritic",
+      "Text": "ifElseChain: rewrite if-else to switch statement",
+      "Pos": {"Filename": "misc.go", "Line": 5, "Column": 1}
+    }
+  ]
+}

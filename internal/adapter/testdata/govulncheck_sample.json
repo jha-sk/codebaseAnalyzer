@@ -1,0 +1,2 @@
+{"osv":{"id":"GO-2023-1234","summary":"Denial of service via crafted input"}}
+{"finding":{"osv":"GO-2023-1234","trace":[{"function":"Parse","position":{"filename":"bad.go","line":15}}]}}
