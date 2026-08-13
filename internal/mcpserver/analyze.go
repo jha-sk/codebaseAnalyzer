@@ -11,6 +11,7 @@ import (
 	"codebase-analyser/internal/detect"
 	"codebase-analyser/internal/finding"
 	"codebase-analyser/internal/orchestrator"
+	"codebase-analyser/internal/report"
 )
 
 // AnalyzeInput is the tool's argument object. Every field is optional
@@ -204,6 +205,16 @@ func buildOutput(findings []finding.Finding, skipped []SkippedTool, max int) Ana
 			File: f.File, Line: f.Line, Tool: f.Tool, RuleID: f.RuleID,
 			Category: string(f.Category), Severity: string(f.Severity), Message: f.Message,
 		})
+	}
+	return out
+}
+
+// toReportSkipped adapts the MCP wire type to the report package's own
+// SkippedTool so RenderJSON can be reused verbatim.
+func toReportSkipped(skipped []SkippedTool) []report.SkippedTool {
+	out := make([]report.SkippedTool, 0, len(skipped))
+	for _, s := range skipped {
+		out = append(out, report.SkippedTool{Tool: s.Tool, Path: s.Path, Reason: s.Reason})
 	}
 	return out
 }
