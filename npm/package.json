@@ -1,0 +1,21 @@
+{
+  "name": "@codebase-analyser/mcp",
+  "version": "0.1.0",
+  "description": "MCP server for codebase-analyser: static analysis for Go and Rust as an agent tool",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "codebase-analyser-mcp": "index.js"
+  },
+  "files": ["index.js", "README.md"],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jha-sk/codebaseAnalyzer.git"
+  }
+}
