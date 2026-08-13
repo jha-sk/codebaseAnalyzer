@@ -112,6 +112,16 @@ type ToolAdapter interface {
 	Run(path string) ([]finding.Finding, error)
 }
 
+// Targeted is implemented by adapters that can restrict a run to a subset of
+// a project's packages/crates, which is what makes incremental caching
+// possible. It is optional on purpose: govulncheck and cargo-audit scan a
+// whole dependency set and have nothing smaller to be restricted to, so they
+// always run in full.
+type Targeted interface {
+	ToolAdapter
+	RunTargets(path string, targets []string) ([]finding.Finding, error)
+}
+
 // runCommand executes name with args in dir and returns stdout, respecting
 // DefaultTimeout. Linters commonly exit non-zero when they find issues —
 // that's not a run failure, so a non-zero exit is only treated as success

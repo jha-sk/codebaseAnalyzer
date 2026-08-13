@@ -88,13 +88,27 @@ var concurrencyRules = map[string]bool{
 // the entire operational-category story), so restricting to that set is the
 // intended scope rather than an accident of golangci-lint's defaults.
 // (v1's equivalent flag was --disable-all, removed in v2.)
-func (GolangciLint) Run(path string) ([]finding.Finding, error) {
-	out, err := runCommand(path, "golangci-lint", "run",
+func (g GolangciLint) Run(path string) ([]finding.Finding, error) {
+	return g.RunTargets(path, nil)
+}
+
+// RunTargets restricts the run to the given package patterns; empty targets
+// means the whole module, which is what Run has always done. Verified
+// against a real golangci-lint v2.12.2 run that a bare package directory
+// (e.g. "./internal/detect") both restricts findings to that package and
+// keeps the exact same Issues/FromLinter/Text/Pos.Filename/Pos.Line shape.
+func (GolangciLint) RunTargets(path string, targets []string) ([]finding.Finding, error) {
+	if len(targets) == 0 {
+		targets = []string{"./..."}
+	}
+	args := append([]string{"run",
 		"--output.json.path", "stdout",
 		"--output.text.path", "stderr",
 		"--show-stats=false",
 		"--default", "none",
-		"--enable", "govet,errcheck,staticcheck,contextcheck,bodyclose,noctx")
+		"--enable", "govet,errcheck,staticcheck,contextcheck,bodyclose,noctx",
+	}, targets...)
+	out, err := runCommand(path, "golangci-lint", args...)
 	if err != nil {
 		return nil, fmt.Errorf("golangci-lint: %w", err)
 	}

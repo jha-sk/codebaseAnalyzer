@@ -119,6 +119,25 @@ func TestComputeGoBinDir_fallsBackToGOPATH(t *testing.T) {
 	}
 }
 
+// TestOnlyPackageScopedAdaptersAreTargeted pins which adapters implement
+// Targeted: the three linters that reason about one package/crate at a time
+// can be restricted (and so cached); govulncheck/cargo-audit reason about a
+// whole dependency set and have nothing smaller to restrict to.
+func TestOnlyPackageScopedAdaptersAreTargeted(t *testing.T) {
+	targeted := []ToolAdapter{GolangciLint{}, Gosec{}, Clippy{}}
+	for _, a := range targeted {
+		if _, ok := a.(Targeted); !ok {
+			t.Errorf("%s does not implement Targeted", a.Name())
+		}
+	}
+	// Whole-dependency-set scanners have nothing smaller to be restricted to.
+	for _, a := range []ToolAdapter{Govulncheck{}, CargoAudit{}} {
+		if _, ok := a.(Targeted); ok {
+			t.Errorf("%s implements Targeted but scans a whole dependency set", a.Name())
+		}
+	}
+}
+
 // TestComputeGoBinDir_degradesWhenGoUnavailable verifies that when `go`
 // is not available, computeGoBinDir returns "" rather than panicking.
 func TestComputeGoBinDir_degradesWhenGoUnavailable(t *testing.T) {

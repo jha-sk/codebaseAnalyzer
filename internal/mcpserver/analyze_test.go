@@ -243,3 +243,135 @@ func TestAnalyzeRejectsBadFilterValues(t *testing.T) {
 		t.Error("category=style: IsError = false, want true")
 	}
 }
+
+// countingAdapter records which targets it was asked to run, so the test can
+// prove the second analysis skipped the unchanged package.
+type countingAdapter struct {
+	fakeAdapter
+	runs *[][]string
+}
+
+func (c countingAdapter) RunTargets(path string, targets []string) ([]finding.Finding, error) {
+	*c.runs = append(*c.runs, targets)
+	return c.findings, c.err
+}
+
+func TestAnalyzeSkipsUnchangedPackagesOnSecondCall(t *testing.T) {
+	t.Setenv("CODEBASE_ANALYSER_CACHE", t.TempDir())
+	dir := goRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var runs [][]string
+	s := mcpserver.New(map[string][]adapter.ToolAdapter{
+		"go": {countingAdapter{
+			fakeAdapter: fakeAdapter{name: "fake", findings: []finding.Finding{
+				{File: "a.go", Line: 1, Tool: "fake", RuleID: "R1",
+					Category: finding.CategoryCorrectness, Severity: finding.SeverityHigh, Message: "m"},
+			}},
+			runs: &runs,
+		}},
+	})
+	cs := connect(t, s)
+
+	first, _ := callAnalyze(t, cs, map[string]any{"path": dir})
+	if first.Total != 1 {
+		t.Fatalf("first call Total = %d, want 1", first.Total)
+	}
+	runsAfterFirst := len(runs)
+	if runsAfterFirst == 0 {
+		t.Fatal("the first call never invoked the adapter")
+	}
+
+	second, _ := callAnalyze(t, cs, map[string]any{"path": dir})
+	if second.Total != 1 {
+		t.Errorf("second call Total = %d, want 1 (cached findings must still be reported)", second.Total)
+	}
+	if len(runs) != runsAfterFirst {
+		t.Errorf("adapter ran again on an unchanged package: %v", runs[runsAfterFirst:])
+	}
+
+	// Editing a file must bring its package back.
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package fixture\n\nvar x = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _ = callAnalyze(t, cs, map[string]any{"path": dir}); len(runs) == runsAfterFirst {
+		t.Error("adapter did not re-run after the package's source changed")
+	}
+}
+
+func TestCacheHitIsNotIncompleteCoverage(t *testing.T) {
+	t.Setenv("CODEBASE_ANALYSER_CACHE", t.TempDir())
+	dir := goRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var runs [][]string
+	s := mcpserver.New(map[string][]adapter.ToolAdapter{
+		"go": {countingAdapter{
+			fakeAdapter: fakeAdapter{name: "fake", findings: []finding.Finding{
+				{File: "a.go", Line: 1, Tool: "fake", RuleID: "R1",
+					Category: finding.CategoryCorrectness, Severity: finding.SeverityHigh, Message: "m"},
+			}},
+			runs: &runs,
+		}},
+	})
+	cs := connect(t, s)
+
+	first, _ := callAnalyze(t, cs, map[string]any{"path": dir})
+	if first.Incomplete || len(first.SkippedTools) != 0 {
+		t.Fatalf("first call: Incomplete=%v SkippedTools=%+v, want complete", first.Incomplete, first.SkippedTools)
+	}
+
+	second, _ := callAnalyze(t, cs, map[string]any{"path": dir})
+	if second.Incomplete {
+		t.Error("a fully cached run reported Incomplete=true; cli.Execute would exit 2 and CI would call a healthy repo a broken scan")
+	}
+	if len(second.SkippedTools) != 0 {
+		t.Errorf("a cached run produced skip records: %+v", second.SkippedTools)
+	}
+	if second.Total != 1 {
+		t.Errorf("cached run Total = %d, want 1", second.Total)
+	}
+}
+
+func TestGenuineSkipStillSurfacesAlongsideCacheHits(t *testing.T) {
+	t.Setenv("CODEBASE_ANALYSER_CACHE", t.TempDir())
+	dir := goRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var runs [][]string
+	s := mcpserver.New(map[string][]adapter.ToolAdapter{
+		"go": {
+			countingAdapter{
+				fakeAdapter: fakeAdapter{name: "cacheable", findings: []finding.Finding{
+					{File: "a.go", Line: 1, Tool: "cacheable", RuleID: "R1",
+						Category: finding.CategoryCorrectness, Severity: finding.SeverityHigh, Message: "m"},
+				}},
+				runs: &runs,
+			},
+			fakeAdapter{name: "broken", err: errFake}, // not Targeted: always runs, always fails
+		},
+	})
+	cs := connect(t, s)
+
+	callAnalyze(t, cs, map[string]any{"path": dir}) // warm the cache
+	second, _ := callAnalyze(t, cs, map[string]any{"path": dir})
+
+	if !second.Incomplete {
+		t.Error("Incomplete=false, but a tool genuinely failed; a cache hit on its neighbour must not mask that")
+	}
+	found := false
+	for _, s := range second.SkippedTools {
+		if s.Tool == "broken" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the genuinely skipped tool vanished from SkippedTools: %+v", second.SkippedTools)
+	}
+}

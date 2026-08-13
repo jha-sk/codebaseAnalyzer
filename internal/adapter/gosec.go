@@ -51,8 +51,21 @@ var gosecLowConfidenceDamp = map[finding.Severity]finding.Severity{
 	finding.SeverityLow:      finding.SeverityLow,
 }
 
-func (Gosec) Run(path string) ([]finding.Finding, error) {
-	out, err := runCommand(path, "gosec", "-fmt=json", "./...")
+func (g Gosec) Run(path string) ([]finding.Finding, error) {
+	return g.RunTargets(path, nil)
+}
+
+// RunTargets restricts the run to the given package patterns; empty targets
+// means the whole module, which is what Run has always done. Verified
+// against a real gosec run that a bare package directory (e.g.
+// "./internal/adapter") both restricts findings to that package and keeps
+// the exact same Issues/file/line/rule_id shape.
+func (Gosec) RunTargets(path string, targets []string) ([]finding.Finding, error) {
+	if len(targets) == 0 {
+		targets = []string{"./..."}
+	}
+	args := append([]string{"-fmt=json"}, targets...)
+	out, err := runCommand(path, "gosec", args...)
 	if err != nil {
 		return nil, fmt.Errorf("gosec: %w", err)
 	}

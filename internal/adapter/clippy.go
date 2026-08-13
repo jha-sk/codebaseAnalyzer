@@ -64,7 +64,14 @@ var concurrencyLints = map[string]bool{
 	"clippy::non_send_fields_in_send_ty":    true,
 }
 
-func (Clippy) Run(path string) ([]finding.Finding, error) {
+func (c Clippy) Run(path string) ([]finding.Finding, error) {
+	return c.RunTargets(path, nil)
+}
+
+// RunTargets ignores targets: a crate is the smallest thing clippy can
+// type-check, and cache.Units already treats a whole crate as one unit. The
+// method exists so Clippy satisfies Targeted and its result gets cached.
+func (Clippy) RunTargets(path string, _ []string) ([]finding.Finding, error) {
 	out, err := runCommand(path, "cargo", "clippy", "--message-format=json")
 	if err != nil {
 		return nil, fmt.Errorf("clippy: %w", err)

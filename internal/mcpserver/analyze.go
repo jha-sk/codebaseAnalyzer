@@ -3,11 +3,13 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"codebase-analyser/internal/cache"
 	"codebase-analyser/internal/detect"
 	"codebase-analyser/internal/finding"
 	"codebase-analyser/internal/orchestrator"
@@ -142,7 +144,7 @@ func (s *Server) analyze(ctx context.Context, _ *mcp.CallToolRequest, in Analyze
 		return nil, AnalyzeOutput{}, fmt.Errorf("no Go or Rust project found under %s", path)
 	}
 
-	findings, skipped := collect(orchestrator.Run(projects, s.adapters))
+	findings, skipped := s.runCached(path, projects)
 	for _, p := range skippedPaths {
 		skipped = append(skipped, SkippedTool{Reason: "unreadable path during detection: " + p})
 	}
@@ -217,4 +219,85 @@ func toReportSkipped(skipped []SkippedTool) []report.SkippedTool {
 		out = append(out, report.SkippedTool{Tool: s.Tool, Path: s.Path, Reason: s.Reason})
 	}
 	return out
+}
+
+// runCached runs every adapter for every project, serving unchanged
+// package/crate results from disk. A cache that cannot be opened degrades to
+// a full uncached run: a broken cache must never stop an analysis.
+func (s *Server) runCached(rootPath string, projects []detect.Project) ([]finding.Finding, []SkippedTool) {
+	store, err := cache.Open(rootPath)
+	if err != nil {
+		return collect(orchestrator.Run(projects, s.adapters))
+	}
+	defer store.Save()
+	return collect(orchestrator.RunWithCache(projects, s.adapters, analysisCache{store: store}))
+}
+
+// analysisCache adapts the on-disk store to what the orchestrator needs.
+type analysisCache struct{ store *cache.Store }
+
+func (a analysisCache) Lookup(tool string, p detect.Project) (stale []string, cached []finding.Finding, ok bool) {
+	units, err := cache.Units(p)
+	if err != nil {
+		return nil, nil, false
+	}
+	stamp := cache.ToolStamp(tool)
+	for _, u := range units {
+		fp, err := cache.Fingerprint(u.Dir, u.Exts)
+		if err != nil {
+			// One unreadable unit disables caching for this whole pair
+			// rather than silently omitting it from the run.
+			return nil, nil, false
+		}
+		if hit, found := a.store.Get(tool, stamp, u.Target, fp); found {
+			cached = append(cached, hit...)
+			continue
+		}
+		stale = append(stale, u.Target)
+	}
+	return stale, cached, true
+}
+
+func (a analysisCache) Store(tool string, p detect.Project, ran []string, produced []finding.Finding) {
+	units, err := cache.Units(p)
+	if err != nil {
+		return
+	}
+	byTarget := map[string]cache.Unit{}
+	for _, u := range units {
+		byTarget[u.Target] = u
+	}
+	grouped := map[string][]finding.Finding{}
+	for _, f := range produced {
+		target := unitFor(f, units, p.Path)
+		grouped[target] = append(grouped[target], f)
+	}
+	stamp := cache.ToolStamp(tool)
+	for _, target := range ran {
+		u, ok := byTarget[target]
+		if !ok {
+			continue
+		}
+		fp, err := cache.Fingerprint(u.Dir, u.Exts)
+		if err != nil {
+			continue
+		}
+		// Recorded even when grouped[target] is empty: "this package is
+		// clean" is the common result and the one most worth caching.
+		_ = a.store.Put(tool, stamp, target, fp, grouped[target])
+	}
+}
+
+// unitFor maps a finding back to the unit that owns it, by matching its
+// file's directory against the unit directories. A finding that matches
+// nothing (a tool-level diagnostic with no file) is attributed to the project
+// root so it is not silently dropped from the cache.
+func unitFor(f finding.Finding, units []cache.Unit, root string) string {
+	dir := filepath.Dir(filepath.Join(root, f.File))
+	for _, u := range units {
+		if u.Dir == dir {
+			return u.Target
+		}
+	}
+	return "./"
 }
