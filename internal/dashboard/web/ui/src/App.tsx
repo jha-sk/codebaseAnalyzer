@@ -4,6 +4,10 @@ import { relativeTime } from './theme'
 import { TopBar } from './components/TopBar'
 import { BranchTable } from './components/BranchTable'
 import { SeverityCards } from './components/SeverityCards'
+import { TrendChart } from './components/TrendChart'
+import { HealthTile } from './components/HealthTile'
+import { CategoryBars } from './components/CategoryBars'
+import { SinceLastRun } from './components/SinceLastRun'
 import type { DashboardData, Repo, RunDetail, Severity } from './types'
 
 export default function App() {
@@ -121,7 +125,14 @@ export default function App() {
             filter={filter}
             onFilter={setFilter}
           />
-          {/* Task 8 inserts TrendChart, HealthTile, CategoryBars, SinceLastRun here. */}
+          <div className="split">
+            <TrendChart history={data.history} />
+            <HealthTile health={data.current?.health ?? null} history={data.history} />
+          </div>
+          <div className="split">
+            <CategoryBars categories={data.current?.categories ?? null} />
+            <SinceLastRun current={data.current} history={data.history} />
+          </div>
           {/* Task 9 inserts ToolStatusPanel, TopFiles, ActivityFeed, FindingsTable here. */}
         </>
       )}
