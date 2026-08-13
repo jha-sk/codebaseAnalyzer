@@ -99,6 +99,11 @@ func resolveCommand(name string) (string, bool) {
 	return candidate, true
 }
 
+// ResolveCommand exposes tool-binary resolution (PATH, then the Go bin dir)
+// to other packages. The cache keys entries by the resolved binary's
+// identity, so replacing a linter invalidates its cached findings.
+func ResolveCommand(name string) (path string, ok bool) { return resolveCommand(name) }
+
 // ToolAdapter wraps one external static-analysis tool.
 type ToolAdapter interface {
 	Name() string
