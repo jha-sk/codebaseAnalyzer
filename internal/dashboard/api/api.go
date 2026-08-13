@@ -220,6 +220,3 @@ func serverError(w http.ResponseWriter, what string, err error) {
 	log.Printf("%s: %v", what, err)
 	httpError(w, http.StatusInternalServerError, what+" failed")
 }
-
-// registerReadRoutes is implemented in dashboard.go (Task 5).
-func (s *server) registerReadRoutes(mux *http.ServeMux) {}
