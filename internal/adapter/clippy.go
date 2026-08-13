@@ -46,9 +46,23 @@ var clippyLevelSeverity = map[string]finding.Severity{
 	"warning": finding.SeverityMedium,
 }
 
-// ponytail: lint names containing these substrings are filed under concurrency;
-// everything else defaults to correctness. Extend if a concurrency lint slips through.
-var concurrencyLintHints = []string{"mutex", "lock", "arc", "atomic", "send", "sync"}
+// concurrencyLints maps exact clippy lint names to concurrency findings.
+// ponytail: curated set; clippy adds new lints regularly and this set will miss them.
+// Upgrade path: add names to this table when new concurrency lints are discovered.
+var concurrencyLints = map[string]bool{
+	"clippy::await_holding_lock":            true,
+	"clippy::await_holding_refcell_ref":     true,
+	"clippy::await_holding_invalid_type":    true,
+	"clippy::mutex_atomic":                  true,
+	"clippy::mutex_integer":                 true,
+	"clippy::rc_mutex":                      true,
+	"clippy::let_underscore_lock":           true,
+	"clippy::readonly_write_lock":           true,
+	"clippy::significant_drop_tightening":   true,
+	"clippy::significant_drop_in_scrutinee": true,
+	"clippy::arc_with_non_send_sync":        true,
+	"clippy::non_send_fields_in_send_ty":    true,
+}
 
 func (Clippy) Run(path string) ([]finding.Finding, error) {
 	out, err := runCommand(path, "cargo", "clippy", "--message-format=json")
@@ -88,11 +102,8 @@ func clippyFindings(r io.Reader) ([]finding.Finding, error) {
 			}
 		}
 		category := finding.CategoryCorrectness
-		for _, hint := range concurrencyLintHints {
-			if strings.Contains(code, hint) {
-				category = finding.CategoryConcurrency
-				break
-			}
+		if concurrencyLints[code] {
+			category = finding.CategoryConcurrency
 		}
 		severity := clippyLevelSeverity[msg.Message.Level]
 		if severity == "" {

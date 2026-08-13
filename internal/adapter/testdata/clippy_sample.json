@@ -2,3 +2,6 @@
 {"reason":"compiler-message","message":{"level":"warning","code":{"code":"clippy::bool_comparison"},"message":"equality checks against true are unnecessary","spans":[{"file_name":"src/main.rs","line_start":3,"is_primary":true}]}}
 {"reason":"compiler-message","message":{"level":"error","code":{"code":"clippy::mutex_atomic"},"message":"consider using an AtomicBool instead of a Mutex<bool>","spans":[{"file_name":"src/lock.rs","line_start":10,"is_primary":true}]}}
 {"reason":"compiler-message","message":{"level":"note","code":{"code":"clippy::needless_return"},"message":"unneeded return statement","spans":[{"file_name":"src/util.rs","line_start":22,"is_primary":true}]}}
+{"reason":"compiler-message","message":{"level":"warning","code":{"code":"clippy::significant_drop_tightening"},"message":"consider tightening the scope of the lock","spans":[{"file_name":"src/concurrency.rs","line_start":15,"is_primary":true}]}}
+{"reason":"compiler-message","message":{"level":"warning","code":{"code":"clippy::search_is_some"},"message":"called `is_some()` after searching an iterator with `find()`","spans":[{"file_name":"src/iter.rs","line_start":8,"is_primary":true}]}}
+{"reason":"compiler-message","message":{"level":"warning","code":{"code":"clippy::unknown_lint_xyz"},"message":"unknown lint","spans":[{"file_name":"src/unknown.rs","line_start":5,"is_primary":true}]}}

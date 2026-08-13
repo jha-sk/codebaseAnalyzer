@@ -40,8 +40,8 @@ func TestClippy_parse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(findings) != 3 {
-		t.Fatalf("got %d findings, want 3", len(findings))
+	if len(findings) != 6 {
+		t.Fatalf("got %d findings, want 6", len(findings))
 	}
 	if findings[0].RuleID != "clippy::bool_comparison" || findings[0].Category != finding.CategoryCorrectness {
 		t.Errorf("finding[0] = %+v", findings[0])
@@ -57,5 +57,17 @@ func TestClippy_parse(t *testing.T) {
 	}
 	if findings[2].RuleID != "clippy::needless_return" || findings[2].Severity != finding.SeverityMedium {
 		t.Errorf("finding[2] = %+v, want clippy::needless_return/medium (unrecognized level %q falls back)", findings[2], "note")
+	}
+	// Regression test: significant_drop_tightening must be concurrency (was false negative with substring matching)
+	if findings[3].RuleID != "clippy::significant_drop_tightening" || findings[3].Category != finding.CategoryConcurrency {
+		t.Errorf("finding[3] = %+v, want significant_drop_tightening/concurrency", findings[3])
+	}
+	// Regression test: search_is_some must be correctness (was false positive: "search" contains "arc")
+	if findings[4].RuleID != "clippy::search_is_some" || findings[4].Category != finding.CategoryCorrectness {
+		t.Errorf("finding[4] = %+v, want search_is_some/correctness", findings[4])
+	}
+	// Regression test: unknown lint falls back to correctness
+	if findings[5].RuleID != "clippy::unknown_lint_xyz" || findings[5].Category != finding.CategoryCorrectness {
+		t.Errorf("finding[5] = %+v, want unknown_lint_xyz/correctness", findings[5])
 	}
 }
