@@ -19,6 +19,41 @@ func TestExecute_noProjectFound(t *testing.T) {
 	}
 }
 
+// Important 5: an invalid --llm-provider must be caught before Detect runs,
+// not after. t.TempDir() has neither go.mod nor Cargo.toml, so if provider
+// validation happened after (or was skipped before) Detect, this would fail
+// with "no Go or Rust project found" instead of the provider error -
+// proving the ordering, not just that some error comes back.
+func TestExecute_invalidProviderFailsBeforeDetect(t *testing.T) {
+	var buf bytes.Buffer
+	_, err := Execute(context.Background(), &buf, RunConfig{
+		Path: t.TempDir(), Format: "json", Severity: finding.SeverityHigh, LLMProvider: "bogus-provider",
+	})
+	if err == nil {
+		t.Fatal("expected an error for the invalid --llm-provider")
+	}
+	if strings.Contains(err.Error(), "no Go or Rust project") {
+		t.Fatalf("provider validation must happen before Detect, got: %v", err)
+	}
+}
+
+// --no-llm must still skip provider validation entirely at the Execute
+// level too (not just inside resolveExplanations): a bogus --llm-provider
+// paired with --no-llm must reach Detect's "no project found" error, not a
+// provider error.
+func TestExecute_noLLMSkipsProviderValidationEvenWithBogusProvider(t *testing.T) {
+	var buf bytes.Buffer
+	_, err := Execute(context.Background(), &buf, RunConfig{
+		Path: t.TempDir(), Format: "json", Severity: finding.SeverityHigh, LLMProvider: "bogus-provider", NoLLM: true,
+	})
+	if err == nil {
+		t.Fatal("expected an error (no project found)")
+	}
+	if !strings.Contains(err.Error(), "no Go or Rust project") {
+		t.Fatalf("expected the no-project error since --no-llm should skip provider validation, got: %v", err)
+	}
+}
+
 func TestFilterCategories(t *testing.T) {
 	findings := []finding.Finding{
 		{Category: finding.CategorySecurity},
@@ -117,21 +152,58 @@ func TestWriteNotes_noNotesWritesNothing(t *testing.T) {
 // trigger a non-zero exit code, not just findings strictly above it.
 func TestComputeExitCode_atThresholdTriggersNonZero(t *testing.T) {
 	explained := []finding.ExplainedFinding{{Finding: finding.Finding{Severity: finding.SeverityHigh}}}
-	if got := computeExitCode(explained, finding.SeverityHigh); got != 1 {
+	if got := computeExitCode(explained, finding.SeverityHigh, false); got != 1 {
 		t.Fatalf("computeExitCode = %d, want 1 for a finding at threshold", got)
 	}
 }
 
 func TestComputeExitCode_belowThresholdIsZero(t *testing.T) {
 	explained := []finding.ExplainedFinding{{Finding: finding.Finding{Severity: finding.SeverityLow}}}
-	if got := computeExitCode(explained, finding.SeverityHigh); got != 0 {
+	if got := computeExitCode(explained, finding.SeverityHigh, false); got != 0 {
 		t.Fatalf("computeExitCode = %d, want 0 for a finding below threshold", got)
 	}
 }
 
 func TestComputeExitCode_noFindingsIsZero(t *testing.T) {
-	if got := computeExitCode(nil, finding.SeverityHigh); got != 0 {
+	if got := computeExitCode(nil, finding.SeverityHigh, false); got != 0 {
 		t.Fatalf("computeExitCode = %d, want 0 for no findings", got)
+	}
+}
+
+// Critical 2: a run where every tool was skipped must never look like a
+// clean pass just because zero tools produced zero findings.
+func TestComputeExitCode_allSkippedNoFindingsIsIncomplete(t *testing.T) {
+	if got := computeExitCode(nil, finding.SeverityHigh, true); got != 2 {
+		t.Fatalf("computeExitCode = %d, want 2 (incomplete coverage) when every tool was skipped and nothing was found", got)
+	}
+}
+
+// Some tools ran and found nothing above threshold, but others were
+// skipped: coverage is still partial, so this must not read as a clean
+// pass either.
+func TestComputeExitCode_someSkippedBelowThresholdIsIncomplete(t *testing.T) {
+	explained := []finding.ExplainedFinding{{Finding: finding.Finding{Severity: finding.SeverityLow}}}
+	if got := computeExitCode(explained, finding.SeverityHigh, true); got != 2 {
+		t.Fatalf("computeExitCode = %d, want 2 (incomplete coverage) with a below-threshold finding and a skipped tool", got)
+	}
+}
+
+// A real finding at/above threshold takes priority over the incomplete-
+// coverage signal: something was actually found, which is the more urgent
+// fact, even though coverage was also partial.
+func TestComputeExitCode_thresholdMetWinsOverIncompleteCoverage(t *testing.T) {
+	explained := []finding.ExplainedFinding{{Finding: finding.Finding{Severity: finding.SeverityCritical}}}
+	if got := computeExitCode(explained, finding.SeverityHigh, true); got != 1 {
+		t.Fatalf("computeExitCode = %d, want 1 (threshold met) even though coverage was also incomplete", got)
+	}
+}
+
+// The fully clean path: no findings at/above threshold, and no tool was
+// skipped.
+func TestComputeExitCode_noneSkippedCleanPassIsZero(t *testing.T) {
+	explained := []finding.ExplainedFinding{{Finding: finding.Finding{Severity: finding.SeverityLow}}}
+	if got := computeExitCode(explained, finding.SeverityHigh, false); got != 0 {
+		t.Fatalf("computeExitCode = %d, want 0 for a clean run with full coverage", got)
 	}
 }
 

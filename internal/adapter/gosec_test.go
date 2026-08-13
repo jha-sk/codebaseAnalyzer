@@ -19,8 +19,8 @@ func TestGosec_parse(t *testing.T) {
 	}
 	findings := gosecFindings(parsed)
 
-	if len(findings) != 3 {
-		t.Fatalf("got %d findings, want 3", len(findings))
+	if len(findings) != 4 {
+		t.Fatalf("got %d findings, want 4", len(findings))
 	}
 	if findings[0].Severity != finding.SeverityCritical || findings[0].Category != finding.CategorySecurity {
 		t.Errorf("finding[0] = %+v", findings[0])
@@ -33,5 +33,12 @@ func TestGosec_parse(t *testing.T) {
 	}
 	if findings[2].Severity != finding.SeverityMedium {
 		t.Errorf("finding[2].Severity = %v, want medium (unrecognized severity %q falls back)", findings[2].Severity, "CRITICAL")
+	}
+	// HIGH severity/LOW confidence is gosec's classic false-positive shape
+	// (e.g. G101's entropy heuristic). It must be damped one level below
+	// what a HIGH/HIGH finding of the same rule would get, not report
+	// identically as "critical".
+	if findings[3].Severity != finding.SeverityHigh {
+		t.Errorf("finding[3].Severity = %v, want high (HIGH severity damped one level for LOW confidence)", findings[3].Severity)
 	}
 }

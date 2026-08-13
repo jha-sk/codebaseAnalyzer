@@ -24,17 +24,31 @@ type gosecOutput struct {
 }
 
 type gosecIssue struct {
-	Severity string `json:"severity"`
-	RuleID   string `json:"rule_id"`
-	Details  string `json:"details"`
-	File     string `json:"file"`
-	Line     string `json:"line"`
+	Severity   string `json:"severity"`
+	Confidence string `json:"confidence"`
+	RuleID     string `json:"rule_id"`
+	Details    string `json:"details"`
+	File       string `json:"file"`
+	Line       string `json:"line"`
 }
 
 var gosecSeverity = map[string]finding.Severity{
 	"HIGH":   finding.SeverityCritical,
 	"MEDIUM": finding.SeverityHigh,
 	"LOW":    finding.SeverityMedium,
+}
+
+// gosecLowConfidenceDamp drops a LOW-confidence finding's severity by one
+// level from what gosecSeverity alone would assign. LOW confidence is
+// gosec's classic false-positive shape (e.g. G101's entropy heuristic
+// flagging any sufficiently random-looking string) - without this, a
+// HIGH-severity/LOW-confidence finding reports identically to a genuine
+// HIGH/HIGH finding, which is worse than not distinguishing them at all.
+var gosecLowConfidenceDamp = map[finding.Severity]finding.Severity{
+	finding.SeverityCritical: finding.SeverityHigh,
+	finding.SeverityHigh:     finding.SeverityMedium,
+	finding.SeverityMedium:   finding.SeverityLow,
+	finding.SeverityLow:      finding.SeverityLow,
 }
 
 func (Gosec) Run(path string) ([]finding.Finding, error) {
@@ -56,6 +70,9 @@ func gosecFindings(parsed gosecOutput) []finding.Finding {
 		severity := gosecSeverity[issue.Severity]
 		if severity == "" {
 			severity = finding.SeverityMedium
+		}
+		if issue.Confidence == "LOW" {
+			severity = gosecLowConfidenceDamp[severity]
 		}
 		findings = append(findings, finding.Finding{
 			File:     issue.File,

@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"sync"
 
@@ -13,6 +14,7 @@ import (
 
 type ToolResult struct {
 	Tool     string
+	Path     string // the project path this tool ran against
 	Findings []finding.Finding
 	Skipped  bool
 	Error    error
@@ -66,13 +68,43 @@ func runOne(a adapter.ToolAdapter, path string, inst *installer) (result ToolRes
 	}()
 
 	if err := inst.ensure(a); err != nil {
-		return ToolResult{Tool: a.Name(), Skipped: true, Error: err}
+		return ToolResult{Tool: a.Name(), Path: path, Skipped: true, Error: err}
 	}
 	findings, err := a.Run(path)
 	if err != nil {
-		return ToolResult{Tool: a.Name(), Skipped: true, Error: err}
+		return ToolResult{Tool: a.Name(), Path: path, Skipped: true, Error: err}
 	}
-	return ToolResult{Tool: a.Name(), Findings: findings}
+	normalizeFilePaths(findings, path)
+	return ToolResult{Tool: a.Name(), Path: path, Findings: findings}
+}
+
+// normalizeFilePaths rewrites each finding's File to be relative to the
+// project root it was found under, in place. Adapters disagree on this:
+// golangci-lint already reports paths relative to the dir it ran in, gosec
+// reports absolute paths - so the same file shows up under two different
+// names in one report unless it's normalized at this single choke point
+// (every adapter's findings pass through runOne). Paths that are already
+// relative, empty (cargo-audit's synthetic "Cargo.lock"), or that fail to
+// resolve relative to root are left untouched rather than mangled.
+//
+// root itself may be relative (e.g. `analyser run testdata/fixtures/go-repo`
+// from the repo root) while an adapter's File is always absolute (gosec
+// resolves ./... against its own working directory) - filepath.Rel errors
+// if exactly one of its two arguments is absolute, so root is resolved to
+// an absolute path first.
+func normalizeFilePaths(findings []finding.Finding, root string) {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return
+	}
+	for i, f := range findings {
+		if f.File == "" || !filepath.IsAbs(f.File) {
+			continue
+		}
+		if rel, err := filepath.Rel(absRoot, f.File); err == nil {
+			findings[i].File = rel
+		}
+	}
 }
 
 // installer memoizes install-or-check-installed per tool name so that, when

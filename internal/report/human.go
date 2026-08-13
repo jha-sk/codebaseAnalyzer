@@ -7,6 +7,16 @@ import (
 	"codebase-analyser/internal/finding"
 )
 
+// SkippedTool records one tool that didn't run for one project (install
+// failure, crash, timeout, missing binary), so both renderers can make
+// incomplete coverage visible in the report itself - not just via the exit
+// code or a note that's easy to miss when only the report body is captured.
+type SkippedTool struct {
+	Tool   string
+	Path   string
+	Reason string
+}
+
 func Summary(findings []finding.ExplainedFinding) map[finding.Severity]int {
 	counts := map[finding.Severity]int{}
 	for _, f := range findings {
@@ -31,11 +41,18 @@ var knownSeverities = map[finding.Severity]bool{
 	finding.SeverityMedium: true, finding.SeverityLow: true,
 }
 
-func RenderHuman(w io.Writer, findings []finding.ExplainedFinding) {
+func RenderHuman(w io.Writer, findings []finding.ExplainedFinding, skipped []SkippedTool) {
 	counts := Summary(findings)
-	fmt.Fprintf(w, "Summary: critical=%d high=%d medium=%d low=%d\n\n",
+	fmt.Fprintf(w, "Summary: critical=%d high=%d medium=%d low=%d\n",
 		counts[finding.SeverityCritical], counts[finding.SeverityHigh],
 		counts[finding.SeverityMedium], counts[finding.SeverityLow])
+	if len(skipped) > 0 {
+		fmt.Fprintf(w, "COVERAGE INCOMPLETE: %d tool run(s) skipped, findings below may be incomplete:\n", len(skipped))
+		for _, s := range skipped {
+			fmt.Fprintf(w, "  - %s (%s): %s\n", s.Tool, s.Path, s.Reason)
+		}
+	}
+	fmt.Fprintln(w)
 
 	byCategory := map[finding.Category][]finding.ExplainedFinding{}
 	for _, f := range findings {
@@ -108,6 +125,9 @@ func renderRules(w io.Writer, sev finding.Severity, sevGroup []finding.Explained
 		fmt.Fprintf(w, "  [%s] %s (%d)\n", sev, rule, len(items))
 		if items[0].Explanation != "" {
 			fmt.Fprintf(w, "    %s\n", items[0].Explanation)
+		}
+		if items[0].FixPattern != "" {
+			fmt.Fprintf(w, "    Fix: %s\n", items[0].FixPattern)
 		}
 		for _, f := range items {
 			fmt.Fprintf(w, "    - %s:%d %s\n", f.File, f.Line, f.Message)

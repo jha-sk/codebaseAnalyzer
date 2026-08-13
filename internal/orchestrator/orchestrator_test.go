@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -155,6 +157,109 @@ func TestRun_installFailureSkips(t *testing.T) {
 	if otherResult.Skipped || len(otherResult.Findings) != 1 {
 		t.Errorf("other-tool result = %+v, want unaffected by the sibling's install failure", otherResult)
 	}
+}
+
+// ToolResult must carry the project path it ran against, so two instances
+// of the same tool across multiple detected projects (e.g. two skipped
+// govulncheck notes) can be told apart instead of printing identical lines.
+func TestRun_toolResultCarriesProjectPath(t *testing.T) {
+	projects := []detect.Project{
+		{Path: "/repo1", Language: "go"},
+		{Path: "/repo2", Language: "go"},
+	}
+	adapters := map[string][]adapter.ToolAdapter{
+		"go": {fakeAdapter{name: "sometool", installed: true, findings: []finding.Finding{{Tool: "sometool"}}}},
+	}
+
+	results := Run(projects, adapters)
+
+	paths := map[string]bool{}
+	for _, r := range results {
+		paths[r.Path] = true
+	}
+	if !paths["/repo1"] || !paths["/repo2"] {
+		t.Fatalf("results = %+v, want one result carrying Path=/repo1 and one carrying Path=/repo2", results)
+	}
+}
+
+// An absolute finding.File must come back relative to the project root it
+// was found under, so adapters that report absolute paths (gosec) and
+// adapters that report already-relative paths (golangci-lint) render the
+// same file identically instead of as two different-looking entries.
+func TestRun_normalizesAbsoluteFilePaths(t *testing.T) {
+	projects := []detect.Project{{Path: "/repo", Language: "go"}}
+	adapters := map[string][]adapter.ToolAdapter{
+		"go": {
+			fakeAdapter{name: "abs-tool", installed: true, findings: []finding.Finding{
+				{Tool: "abs-tool", File: "/repo/sub/file.go"},
+			}},
+			fakeAdapter{name: "rel-tool", installed: true, findings: []finding.Finding{
+				{Tool: "rel-tool", File: "sub/file.go"},
+			}},
+			fakeAdapter{name: "no-file-tool", installed: true, findings: []finding.Finding{
+				{Tool: "no-file-tool", File: ""},
+			}},
+		},
+	}
+
+	results := Run(projects, adapters)
+
+	for _, r := range results {
+		switch r.Tool {
+		case "abs-tool":
+			if got := r.Findings[0].File; got != "sub/file.go" {
+				t.Errorf("abs-tool File = %q, want %q (relative to project root)", got, "sub/file.go")
+			}
+		case "rel-tool":
+			if got := r.Findings[0].File; got != "sub/file.go" {
+				t.Errorf("rel-tool File = %q, want unchanged %q", got, "sub/file.go")
+			}
+		case "no-file-tool":
+			if got := r.Findings[0].File; got != "" {
+				t.Errorf("no-file-tool File = %q, want empty (left untouched)", got)
+			}
+		}
+	}
+}
+
+// The project root passed to Run can itself be relative (e.g. `analyser run
+// testdata/fixtures/go-repo` from the repo root), while an adapter's
+// absolute File is always fully absolute (gosec resolves ./... against its
+// own working directory). filepath.Rel errors if exactly one of its two
+// arguments is absolute, so this pins that normalizeFilePaths resolves a
+// relative root to absolute before computing Rel, rather than silently
+// leaving the path untouched.
+func TestRun_normalizesAbsoluteFilePaths_relativeProjectRoot(t *testing.T) {
+	root := t.TempDir()
+	relRoot, err := filepath.Rel(mustGetwd(t), root)
+	if err != nil {
+		t.Skipf("project root %q isn't reachable relative to the working directory: %v", root, err)
+	}
+
+	projects := []detect.Project{{Path: relRoot, Language: "go"}}
+	adapters := map[string][]adapter.ToolAdapter{
+		"go": {fakeAdapter{name: "abs-tool", installed: true, findings: []finding.Finding{
+			{Tool: "abs-tool", File: filepath.Join(root, "sub", "file.go")},
+		}}},
+	}
+
+	results := Run(projects, adapters)
+
+	if len(results) != 1 || len(results[0].Findings) != 1 {
+		t.Fatalf("got %+v, want one result with one finding", results)
+	}
+	if got := results[0].Findings[0].File; got != filepath.Join("sub", "file.go") {
+		t.Errorf("File = %q, want %q (relative to the relative project root)", got, filepath.Join("sub", "file.go"))
+	}
+}
+
+func mustGetwd(t *testing.T) string {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return wd
 }
 
 // Two projects sharing a language must not each independently install the

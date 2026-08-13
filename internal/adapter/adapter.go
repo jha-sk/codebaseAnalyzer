@@ -4,7 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	"codebase-analyser/internal/finding"
@@ -16,6 +20,58 @@ const DefaultTimeout = 5 * time.Minute
 // maxStderrInError caps how much stderr text gets embedded in a runCommand
 // error, so one hung/verbose tool can't dump megabytes into a report.
 const maxStderrInError = 500
+
+// goBinDirOnce/goBinDirValue memoize the Go bin directory so every
+// commandExists/runCommand call doesn't shell out to `go env` again.
+var (
+	goBinDirOnce  sync.Once
+	goBinDirValue string
+)
+
+// goBinDir returns the directory `go install` places binaries in: $GOBIN if
+// set, else $GOPATH/bin. `go install .../gosec@latest` (see gosec.go et al)
+// puts gosec/golangci-lint/govulncheck there, but that directory is not on
+// PATH by default - so a fresh auto-install "succeeds" (Install returns nil)
+// and then Run fails with "executable file not found in $PATH". Returns ""
+// if `go` isn't installed/reachable, which degrades to the pre-fix
+// PATH-only behavior rather than panicking.
+func goBinDir() string {
+	goBinDirOnce.Do(func() {
+		if gobin := os.Getenv("GOBIN"); gobin != "" {
+			goBinDirValue = gobin
+			return
+		}
+		out, err := exec.Command("go", "env", "GOPATH").Output()
+		if err != nil {
+			return
+		}
+		if gopath := strings.TrimSpace(string(out)); gopath != "" {
+			goBinDirValue = filepath.Join(gopath, "bin")
+		}
+	})
+	return goBinDirValue
+}
+
+// resolveCommand finds the executable to run for name: PATH first, falling
+// back to goBinDir() for tools `go install` placed there but PATH doesn't
+// see. commandExists must use the exact same resolution, or a tool can
+// report itself "installed" via one path and then fail to exec via the
+// other.
+func resolveCommand(name string) (string, bool) {
+	if p, err := exec.LookPath(name); err == nil {
+		return p, true
+	}
+	dir := goBinDir()
+	if dir == "" {
+		return "", false
+	}
+	candidate := filepath.Join(dir, name)
+	info, err := os.Stat(candidate)
+	if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
+		return "", false
+	}
+	return candidate, true
+}
 
 // ToolAdapter wraps one external static-analysis tool.
 type ToolAdapter interface {
@@ -35,7 +91,13 @@ type ToolAdapter interface {
 func runCommand(dir, name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, name, args...)
+	resolved, ok := resolveCommand(name)
+	if !ok {
+		// Keep the original name in the exec error rather than failing here:
+		// this mirrors pre-fix behavior for a tool that's genuinely absent.
+		resolved = name
+	}
+	cmd := exec.CommandContext(ctx, resolved, args...)
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if exitErr, ok := err.(*exec.ExitError); ok {
@@ -52,6 +114,6 @@ func runCommand(dir, name string, args ...string) ([]byte, error) {
 }
 
 func commandExists(name string) bool {
-	_, err := exec.LookPath(name)
-	return err == nil
+	_, ok := resolveCommand(name)
+	return ok
 }

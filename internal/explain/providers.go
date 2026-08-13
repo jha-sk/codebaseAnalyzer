@@ -4,7 +4,17 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
+
+// explainerHTTPTimeout bounds every LLM provider call end-to-end. Without
+// it, providers used http.DefaultClient (no timeout) with
+// context.Background() (no deadline), so a server that accepts the
+// connection and never responds hung the CLI indefinitely. A single shared
+// *http.Client is safe for concurrent use across all Explain calls.
+const explainerHTTPTimeout = 60 * time.Second
+
+var explainerHTTPClient = &http.Client{Timeout: explainerHTTPTimeout}
 
 func buildPrompt(tool, ruleID, sampleMessage string, count int) string {
 	return fmt.Sprintf(
@@ -78,11 +88,11 @@ func newProvider(name string, getenv func(string) string) (Explainer, error) {
 	}
 	switch name {
 	case "anthropic":
-		return &AnthropicExplainer{APIKey: apiKey, HTTPClient: http.DefaultClient}, nil
+		return &AnthropicExplainer{APIKey: apiKey, HTTPClient: explainerHTTPClient}, nil
 	case "openai":
-		return &OpenAIExplainer{APIKey: apiKey, HTTPClient: http.DefaultClient}, nil
+		return &OpenAIExplainer{APIKey: apiKey, HTTPClient: explainerHTTPClient}, nil
 	case "gemini":
-		return &GeminiExplainer{APIKey: apiKey, HTTPClient: http.DefaultClient}, nil
+		return &GeminiExplainer{APIKey: apiKey, HTTPClient: explainerHTTPClient}, nil
 	}
 	return nil, fmt.Errorf("unknown LLM provider %q (want anthropic|openai|gemini)", name)
 }

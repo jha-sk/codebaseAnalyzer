@@ -19,9 +19,16 @@ func requireTool(t *testing.T, name string) {
 	}
 }
 
-// runE2E runs the real pipeline against path and returns the tool:ruleID
-// pairs found, so each test's assertion reads as one line.
-func runE2E(t *testing.T, path string) []string {
+type e2eFinding struct {
+	Tool     string `json:"tool"`
+	RuleID   string `json:"ruleID"`
+	Severity string `json:"severity"`
+}
+
+// runE2EFindings runs the real pipeline against path and returns the parsed
+// findings (tool, ruleID, severity), so tests can assert on severity as
+// well as which rules fired.
+func runE2EFindings(t *testing.T, path string) []e2eFinding {
 	t.Helper()
 	var buf bytes.Buffer
 	_, err := cli.Execute(context.Background(), &buf, cli.RunConfig{
@@ -35,17 +42,20 @@ func runE2E(t *testing.T, path string) []string {
 	}
 
 	var parsed struct {
-		Findings []struct {
-			RuleID string `json:"ruleID"`
-			Tool   string `json:"tool"`
-		} `json:"findings"`
+		Findings []e2eFinding `json:"findings"`
 	}
 	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
 		t.Fatalf("output not valid JSON: %v\n%s", err, buf.String())
 	}
+	return parsed.Findings
+}
 
+// runE2E runs the real pipeline against path and returns the tool:ruleID
+// pairs found, so each test's assertion reads as one line.
+func runE2E(t *testing.T, path string) []string {
+	t.Helper()
 	var ruleIDs []string
-	for _, f := range parsed.Findings {
+	for _, f := range runE2EFindings(t, path) {
 		ruleIDs = append(ruleIDs, f.Tool+":"+f.RuleID)
 	}
 	return ruleIDs
@@ -63,10 +73,24 @@ func TestEndToEnd_Go_findsKnownIssues(t *testing.T) {
 	requireTool(t, "gosec")
 	requireTool(t, "govulncheck")
 
-	ruleIDs := runE2E(t, "testdata/fixtures/go-repo")
-	joined := strings.Join(ruleIDs, ",")
-	if !strings.Contains(joined, "gosec:G101") {
-		t.Errorf("expected gosec:G101 (hardcoded credential) in findings, got %s", joined)
+	findings := runE2EFindings(t, "testdata/fixtures/go-repo")
+	var joined []string
+	var g101Severity string
+	for _, f := range findings {
+		joined = append(joined, f.Tool+":"+f.RuleID)
+		if f.Tool == "gosec" && f.RuleID == "G101" {
+			g101Severity = f.Severity
+		}
+	}
+	if g101Severity == "" {
+		t.Errorf("expected gosec:G101 (hardcoded credential) in findings, got %s", strings.Join(joined, ","))
+	}
+	// Real gosec reports this fixture's G101 as HIGH severity/LOW confidence
+	// (its entropy heuristic on a random-looking string) - the classic
+	// false-positive shape. It must not report identically to a HIGH/HIGH
+	// finding as "critical".
+	if g101Severity == "critical" {
+		t.Errorf("gosec:G101 reported as critical; want damped below critical since it's HIGH severity/LOW confidence")
 	}
 }
 

@@ -23,6 +23,14 @@
       "details": "Unrecognized severity should fall back to medium",
       "file": "bad.go",
       "line": "12"
+    },
+    {
+      "severity": "HIGH",
+      "confidence": "LOW",
+      "rule_id": "G101",
+      "details": "Low-confidence entropy match, damped one level from critical",
+      "file": "bad.go",
+      "line": "20"
     }
   ]
 }

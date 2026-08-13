@@ -3,10 +3,33 @@ package adapter
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"codebase-analyser/internal/finding"
 )
+
+// TestClippy_checkInstalledRequiresCargoClippyNotJustCargo is Important 2's
+// regression test: a PATH with `cargo` present but no `cargo-clippy` must
+// report as NOT installed, so Install() (rustup component add clippy) gets
+// a chance to run instead of CheckInstalled lying and Run failing later
+// with an opaque subcommand error.
+func TestClippy_checkInstalledRequiresCargoClippyNotJustCargo(t *testing.T) {
+	resetGoBinDirCache()
+	t.Cleanup(resetGoBinDirCache)
+
+	dir := t.TempDir()
+	fakeCargo := filepath.Join(dir, "cargo")
+	if err := os.WriteFile(fakeCargo, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("GOBIN", "")
+
+	if (Clippy{}).CheckInstalled() {
+		t.Error("CheckInstalled() = true with cargo present but cargo-clippy absent, want false")
+	}
+}
 
 func TestClippy_parse(t *testing.T) {
 	raw, err := os.ReadFile("testdata/clippy_sample.json")

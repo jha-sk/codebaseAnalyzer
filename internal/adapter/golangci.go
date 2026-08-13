@@ -14,8 +14,16 @@ type GolangciLint struct{}
 func (GolangciLint) Name() string         { return "golangci-lint" }
 func (GolangciLint) CheckInstalled() bool { return commandExists("golangci-lint") }
 
+// Install installs golangci-lint v2 specifically. `go install
+// .../golangci-lint/cmd/golangci-lint@latest` (no /v2 in the module path)
+// resolves to the latest v1.x tag, not v2 - Go modules requires a /v2
+// segment to reach a v2+ module. Run below uses v2-only flags
+// (--output.json.path, --default), so installing plain @latest here would
+// "succeed" and then fail every real run with "unknown flag" - the same
+// silent-success-then-broken-exec shape as the PATH/GOBIN bug this adapter
+// package works around elsewhere (see resolveCommand in adapter.go).
 func (GolangciLint) Install() error {
-	return exec.Command("go", "install", "github.com/golangci/golangci-lint/cmd/golangci-lint@latest").Run()
+	return exec.Command("go", "install", "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest").Run()
 }
 
 type golangciOutput struct {
@@ -69,11 +77,23 @@ var concurrencyRules = map[string]bool{
 // JSON. Confirmed against a real v2.12.2 run that the Issues/FromLinter/
 // Text/Pos.Filename/Pos.Line shape below still matches; no v1 support is
 // attempted.
+//
+// --default none turns off v2's "standard" default linter set so only the
+// six linters named in --enable run. Without it, golangci-lint v2 runs its
+// standard set (errcheck, govet, staticcheck, unused, ...) alongside
+// --enable rather than instead of it; confirmed against a real run that
+// this leaks an "unused" finding through, which isn't in linterCategory/
+// linterSeverity and so silently falls back to correctness/medium. The
+// spec names exactly these six linters and explains why (three of them are
+// the entire operational-category story), so restricting to that set is the
+// intended scope rather than an accident of golangci-lint's defaults.
+// (v1's equivalent flag was --disable-all, removed in v2.)
 func (GolangciLint) Run(path string) ([]finding.Finding, error) {
 	out, err := runCommand(path, "golangci-lint", "run",
 		"--output.json.path", "stdout",
 		"--output.text.path", "stderr",
 		"--show-stats=false",
+		"--default", "none",
 		"--enable", "govet,errcheck,staticcheck,contextcheck,bodyclose,noctx")
 	if err != nil {
 		return nil, fmt.Errorf("golangci-lint: %w", err)

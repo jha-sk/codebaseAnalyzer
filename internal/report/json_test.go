@@ -16,7 +16,7 @@ func TestRenderJSON(t *testing.T) {
 			Explanation: "why"},
 	}
 	var buf bytes.Buffer
-	if err := RenderJSON(&buf, findings); err != nil {
+	if err := RenderJSON(&buf, findings, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -45,7 +45,7 @@ func TestRenderJSON(t *testing.T) {
 // tooling) never have to special-case a missing array.
 func TestRenderJSONEmptyFindings(t *testing.T) {
 	var buf bytes.Buffer
-	if err := RenderJSON(&buf, nil); err != nil {
+	if err := RenderJSON(&buf, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -83,7 +83,7 @@ func TestRenderJSONEmptyExplanation(t *testing.T) {
 			Explanation: ""},
 	}
 	var buf bytes.Buffer
-	if err := RenderJSON(&buf, findings); err != nil {
+	if err := RenderJSON(&buf, findings, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -115,7 +115,7 @@ func TestRenderJSONDoesNotEscapeHTML(t *testing.T) {
 			Message: "send on <-chan int & receive race"}},
 	}
 	var buf bytes.Buffer
-	if err := RenderJSON(&buf, findings); err != nil {
+	if err := RenderJSON(&buf, findings, nil); err != nil {
 		t.Fatal(err)
 	}
 	raw := buf.String()
@@ -132,5 +132,115 @@ func TestRenderJSONDoesNotEscapeHTML(t *testing.T) {
 		if strings.Contains(raw, marker) {
 			t.Errorf("output was HTML-escaped (found %s), got:\n%s", marker, raw)
 		}
+	}
+}
+
+// TestRenderJSONFixPattern is Critical 3's JSON-side regression test:
+// fixPattern must be duplicated per finding, exactly like explanation, so
+// downstream CI tooling reading the flat findings array doesn't need to
+// understand the (tool, ruleID) grouping the LLM step batches on.
+func TestRenderJSONFixPattern(t *testing.T) {
+	findings := []finding.ExplainedFinding{
+		{Finding: finding.Finding{File: "bad.go", Line: 6, Tool: "gosec", RuleID: "G101",
+			Category: finding.CategorySecurity, Severity: finding.SeverityCritical, Message: "hardcoded credential"},
+			Explanation: "why", FixPattern: "load from a secrets manager instead"},
+	}
+	var buf bytes.Buffer
+	if err := RenderJSON(&buf, findings, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	var parsed struct {
+		Findings []struct {
+			FixPattern string `json:"fixPattern"`
+		} `json:"findings"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Findings) != 1 || parsed.Findings[0].FixPattern != "load from a secrets manager instead" {
+		t.Errorf("findings = %+v", parsed.Findings)
+	}
+}
+
+// TestRenderJSONEmptyFixPattern ensures an empty FixPattern (the --no-llm or
+// failed-group fallback) round-trips as an empty string, not an omitted
+// field - matching the existing Explanation contract.
+func TestRenderJSONEmptyFixPattern(t *testing.T) {
+	findings := []finding.ExplainedFinding{
+		{Finding: finding.Finding{File: "x.go", Line: 1, Tool: "t", RuleID: "R",
+			Category: finding.CategoryCorrectness, Severity: finding.SeverityLow, Message: "msg"}},
+	}
+	var buf bytes.Buffer
+	if err := RenderJSON(&buf, findings, nil); err != nil {
+		t.Fatal(err)
+	}
+	var parsed struct {
+		Findings []struct {
+			FixPattern string `json:"fixPattern"`
+		} `json:"findings"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Findings) != 1 || parsed.Findings[0].FixPattern != "" {
+		t.Errorf("findings = %+v", parsed.Findings)
+	}
+}
+
+// TestRenderJSON_skippedToolsMakeIncompleteCoverageMachineReadable is
+// Critical 2's JSON-side regression test: a consumer reading only stdout
+// JSON (the spec's explicit CI-tooling rationale) must be able to see
+// incomplete coverage from the document itself, not just a stderr note or
+// the process exit code.
+func TestRenderJSON_skippedToolsMakeIncompleteCoverageMachineReadable(t *testing.T) {
+	var buf bytes.Buffer
+	if err := RenderJSON(&buf, nil, []SkippedTool{
+		{Tool: "govulncheck", Path: "/repo", Reason: "not found in $PATH"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var parsed struct {
+		Incomplete   bool `json:"incomplete"`
+		SkippedTools []struct {
+			Tool   string `json:"tool"`
+			Path   string `json:"path"`
+			Reason string `json:"reason"`
+		} `json:"skippedTools"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if !parsed.Incomplete {
+		t.Error("incomplete = false, want true when a tool was skipped")
+	}
+	if len(parsed.SkippedTools) != 1 || parsed.SkippedTools[0].Tool != "govulncheck" || parsed.SkippedTools[0].Path != "/repo" {
+		t.Errorf("skippedTools = %+v", parsed.SkippedTools)
+	}
+}
+
+// TestRenderJSON_noSkippedToolsIsComplete ensures the clean-run path
+// reports incomplete=false and an empty (not null) skippedTools array.
+func TestRenderJSON_noSkippedToolsIsComplete(t *testing.T) {
+	var buf bytes.Buffer
+	if err := RenderJSON(&buf, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(buf.Bytes(), []byte(`"skippedTools": null`)) {
+		t.Errorf("skippedTools must not serialize as null: %s", buf.String())
+	}
+	var parsed struct {
+		Incomplete   bool          `json:"incomplete"`
+		SkippedTools []SkippedTool `json:"skippedTools"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Incomplete {
+		t.Error("incomplete = true, want false when nothing was skipped")
+	}
+	if parsed.SkippedTools == nil || len(parsed.SkippedTools) != 0 {
+		t.Errorf("skippedTools = %+v, want empty non-nil slice", parsed.SkippedTools)
 	}
 }

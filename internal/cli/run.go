@@ -46,7 +46,15 @@ func NewRunCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "run <path>",
 		Short: "Analyse a Go/Rust codebase for production-safety issues",
-		Args:  cobra.ExactArgs(1),
+		Long: `Analyse a Go/Rust codebase for production-safety issues.
+
+Exit codes:
+  0  clean pass: no finding at/above --severity, full tool coverage
+  1  at least one finding at/above --severity
+  2  no finding at/above --severity, but coverage was incomplete
+     (a tool was skipped - install failure, crash, timeout, or missing
+     binary; see the report/notes for which one and why)`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Past this point failures are runtime outcomes, not misuse of
 			// the command line, so a usage dump would only add noise.
@@ -103,7 +111,19 @@ func NewRunCmd() *cobra.Command {
 // lands in the terminal in the interactive case, and duplicating would just
 // be noise there.
 func Execute(ctx context.Context, w io.Writer, cfg RunConfig) (int, error) {
-	projects, err := detect.Detect(cfg.Path)
+	// Validate LLM provider selection before Detect/orchestrator.Run - a bad
+	// --llm-provider value or a named provider with no API key used to
+	// surface only after the entire (potentially minutes-long) analysis
+	// finished, discarding every finding. resolveExplanations below repeats
+	// this same check once actual findings exist; that's fine; it's a pure
+	// env-var/flag check, not I/O.
+	if !cfg.NoLLM {
+		if _, _, _, err := explain.SelectProvider(cfg.LLMProvider, os.Getenv); err != nil {
+			return 1, err
+		}
+	}
+
+	projects, skippedPaths, err := detect.Detect(cfg.Path)
 	if err != nil {
 		return 1, err
 	}
@@ -114,12 +134,17 @@ func Execute(ctx context.Context, w io.Writer, cfg RunConfig) (int, error) {
 	results := orchestrator.Run(projects, orchestrator.DefaultAdapters)
 	var findings []finding.Finding
 	var notes []string
+	var skippedTools []report.SkippedTool
 	for _, r := range results {
 		if r.Skipped {
-			notes = append(notes, fmt.Sprintf("note: skipped %s: %v", r.Tool, r.Error))
+			notes = append(notes, fmt.Sprintf("note: skipped %s (%s): %v", r.Tool, r.Path, r.Error))
+			skippedTools = append(skippedTools, report.SkippedTool{Tool: r.Tool, Path: r.Path, Reason: r.Error.Error()})
 			continue
 		}
 		findings = append(findings, r.Findings...)
+	}
+	for _, s := range skippedPaths {
+		notes = append(notes, "note: skipped unreadable path during detection: "+s)
 	}
 
 	// Filter categories before spending any LLM calls on findings that are
@@ -139,14 +164,14 @@ func Execute(ctx context.Context, w io.Writer, cfg RunConfig) (int, error) {
 	writeNotes(w, cfg.Format, notes)
 
 	if cfg.Format == "json" {
-		if err := report.RenderJSON(w, explained); err != nil {
+		if err := report.RenderJSON(w, explained, skippedTools); err != nil {
 			return 1, err
 		}
 	} else {
-		report.RenderHuman(w, explained)
+		report.RenderHuman(w, explained, skippedTools)
 	}
 
-	return computeExitCode(explained, cfg.Severity), nil
+	return computeExitCode(explained, cfg.Severity, len(skippedTools) > 0), nil
 }
 
 // writeNotes surfaces diagnostic notes (skipped tools, no LLM provider
@@ -169,12 +194,20 @@ func writeNotes(w io.Writer, format string, notes []string) {
 	}
 }
 
-// computeExitCode reports whether any finding is at or above threshold.
-func computeExitCode(explained []finding.ExplainedFinding, threshold finding.Severity) int {
+// computeExitCode picks the process exit code (see the `run` command's Long
+// help text for the contract): 1 if any finding is at/above threshold - a
+// tool being skipped never masks that; 2 if nothing hit threshold but
+// coverage was incomplete (some tool was skipped) - a run where every
+// analyzer was skipped must never look like a clean pass just because zero
+// tools produced zero findings; 0 otherwise.
+func computeExitCode(explained []finding.ExplainedFinding, threshold finding.Severity, incompleteCoverage bool) int {
 	for _, f := range explained {
 		if finding.MeetsThreshold(f.Severity, threshold) {
 			return 1
 		}
+	}
+	if incompleteCoverage {
+		return 2
 	}
 	return 0
 }

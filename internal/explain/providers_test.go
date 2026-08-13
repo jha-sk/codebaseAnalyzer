@@ -15,7 +15,7 @@ func TestAnthropicExplainer_Explain(t *testing.T) {
 			t.Errorf("missing/wrong x-api-key header")
 		}
 		json.NewEncoder(w).Encode(map[string]any{
-			"content": []map[string]string{{"text": "Why it matters: X\nFix pattern: Y"}},
+			"content": []map[string]string{{"type": "text", "text": "Why it matters: X\nFix pattern: Y"}},
 		})
 	}))
 	defer srv.Close()
@@ -27,6 +27,58 @@ func TestAnthropicExplainer_Explain(t *testing.T) {
 	}
 	if exp.Text != "X" || exp.FixPattern != "Y" {
 		t.Errorf("got %+v", exp)
+	}
+}
+
+// TestAnthropicExplainer_leadingThinkingBlock is Critical 4's regression
+// test: claude-sonnet-5 runs adaptive thinking by default, so a real
+// response's content array leads with a "thinking" block (empty Text, since
+// thinking.display defaults to "omitted") before the "text" block that
+// actually carries the answer. Indexing Content[0] positionally returns the
+// empty thinking block; this pins the fix that selects the first block
+// whose type is "text" instead.
+func TestAnthropicExplainer_leadingThinkingBlock(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"content": []map[string]any{
+				{"type": "thinking", "thinking": "reasoning about the rule...", "text": ""},
+				{"type": "text", "text": "Why it matters: X\nFix pattern: Y"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	e := &AnthropicExplainer{APIKey: "test-key", HTTPClient: srv.Client(), BaseURL: srv.URL}
+	exp, err := e.Explain(context.Background(), "gosec", "G101", "sample", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exp.Text != "X" || exp.FixPattern != "Y" {
+		t.Errorf("got %+v, want the text block's content, not the leading thinking block's empty text", exp)
+	}
+}
+
+// TestAnthropicExplainer_onlyThinkingBlockNoText covers a response that
+// somehow carries no text block at all: this must be a real, visible error
+// (so the group falls back to unexplained) rather than a silent empty
+// Explanation with a nil error.
+func TestAnthropicExplainer_onlyThinkingBlockNoText(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"content": []map[string]any{
+				{"type": "thinking", "thinking": "reasoning...", "text": ""},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	e := &AnthropicExplainer{APIKey: "test-key", HTTPClient: srv.Client(), BaseURL: srv.URL}
+	exp, err := e.Explain(context.Background(), "gosec", "G101", "sample", 3)
+	if err == nil {
+		t.Fatal("expected an error when the response has no text block, not a silent empty Explanation")
+	}
+	if exp != (Explanation{}) {
+		t.Errorf("expected zero-value Explanation on error, got %+v", exp)
 	}
 }
 
@@ -248,6 +300,30 @@ func TestSelectProvider_flagNamesProviderWithNoAPIKey(t *testing.T) {
 	}
 	if e != nil {
 		t.Fatalf("expected a nil Explainer, got %+v", e)
+	}
+}
+
+// TestNewProvider_httpClientHasTimeout is Important 4's regression test:
+// providers built by newProvider (the real, non-test construction path)
+// must not use a client with no timeout - a server that accepts the
+// connection and never responds must not hang the CLI forever.
+func TestNewProvider_httpClientHasTimeout(t *testing.T) {
+	getenv := func(k string) string {
+		if k == "ANTHROPIC_API_KEY" {
+			return "key"
+		}
+		return ""
+	}
+	e, err := newProvider("anthropic", getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ae, ok := e.(*AnthropicExplainer)
+	if !ok {
+		t.Fatalf("got %T, want *AnthropicExplainer", e)
+	}
+	if ae.HTTPClient == nil || ae.HTTPClient.Timeout <= 0 {
+		t.Errorf("HTTPClient = %+v, want a non-nil client with Timeout > 0", ae.HTTPClient)
 	}
 }
 

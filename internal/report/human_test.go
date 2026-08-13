@@ -15,7 +15,7 @@ func TestRenderHuman(t *testing.T) {
 			Explanation: "secrets in source get leaked via git history"},
 	}
 	var buf bytes.Buffer
-	RenderHuman(&buf, findings)
+	RenderHuman(&buf, findings, nil)
 	out := buf.String()
 
 	if !strings.Contains(out, "critical=1") {
@@ -48,7 +48,7 @@ func TestSummary(t *testing.T) {
 // sensible report (a zeroed summary line, no panics, no category headers).
 func TestRenderHumanEmpty(t *testing.T) {
 	var buf bytes.Buffer
-	RenderHuman(&buf, nil)
+	RenderHuman(&buf, nil, nil)
 	out := buf.String()
 
 	if !strings.Contains(out, "critical=0 high=0 medium=0 low=0") {
@@ -92,7 +92,7 @@ func TestRenderHumanDeterministicOrder(t *testing.T) {
 	var first string
 	for i := 0; i < 20; i++ {
 		var buf bytes.Buffer
-		RenderHuman(&buf, findings)
+		RenderHuman(&buf, findings, nil)
 		out := buf.String()
 		if i == 0 {
 			first = out
@@ -159,7 +159,7 @@ func TestRenderHumanEmptyExplanation(t *testing.T) {
 			Explanation: "has an explanation"},
 	}
 	var buf bytes.Buffer
-	RenderHuman(&buf, findings)
+	RenderHuman(&buf, findings, nil)
 	out := buf.String()
 
 	noExplanationBlock := "  [low] t/R (1)\n    - x.go:1 msg\n"
@@ -185,7 +185,7 @@ func TestRenderHumanUnknownCategoryAndSeverityNotDropped(t *testing.T) {
 			Category: finding.CategoryCorrectness, Severity: finding.Severity("urgent"), Message: "orphan severity"}},
 	}
 	var buf bytes.Buffer
-	RenderHuman(&buf, findings)
+	RenderHuman(&buf, findings, nil)
 	out := buf.String()
 
 	if !strings.Contains(out, "critical=0 high=1 medium=0 low=0") {
@@ -204,5 +204,67 @@ func TestRenderHumanUnknownCategoryAndSeverityNotDropped(t *testing.T) {
 	}
 	if !strings.Contains(out, "[urgent]") {
 		t.Errorf("expected the unrecognized severity label to appear, got:\n%s", out)
+	}
+}
+
+// TestRenderHumanFixPattern is Critical 3's regression test: FixPattern was
+// computed by the LLM step and attached to every ExplainedFinding, but no
+// renderer ever printed it - the "do" half of the spec's "do's and don'ts"
+// framing never reached the user. It must render alongside the explanation,
+// and must not leave a stray label/blank line when empty (the --no-llm or
+// failed-group case).
+func TestRenderHumanFixPattern(t *testing.T) {
+	findings := []finding.ExplainedFinding{
+		{Finding: finding.Finding{File: "x.go", Line: 1, Tool: "t", RuleID: "R",
+			Category: finding.CategoryCorrectness, Severity: finding.SeverityLow, Message: "msg"},
+			Explanation: "why it matters", FixPattern: "use context.WithTimeout instead"},
+		{Finding: finding.Finding{File: "y.go", Line: 2, Tool: "u", RuleID: "S",
+			Category: finding.CategoryCorrectness, Severity: finding.SeverityLow, Message: "msg2"},
+			Explanation: "", FixPattern: ""},
+	}
+	var buf bytes.Buffer
+	RenderHuman(&buf, findings, nil)
+	out := buf.String()
+
+	withFixBlock := "  [low] t/R (1)\n    why it matters\n    Fix: use context.WithTimeout instead\n    - x.go:1 msg\n"
+	if !strings.Contains(out, withFixBlock) {
+		t.Errorf("expected fix pattern rendered under the explanation, got:\n%s", out)
+	}
+
+	noFixBlock := "  [low] u/S (1)\n    - y.go:2 msg2\n"
+	if !strings.Contains(out, noFixBlock) {
+		t.Errorf("expected no stray Fix line when FixPattern is empty, got:\n%s", out)
+	}
+	if strings.Contains(out, "Fix: \n") {
+		t.Errorf("expected no blank Fix line, got:\n%s", out)
+	}
+}
+
+// TestRenderHumanSkippedToolsCoverageIncomplete is Critical 2's report-side
+// regression test: incomplete coverage (some tool skipped) must be visible
+// in the report body itself, not just in the exit code or an external note.
+func TestRenderHumanSkippedToolsCoverageIncomplete(t *testing.T) {
+	var buf bytes.Buffer
+	RenderHuman(&buf, nil, []SkippedTool{
+		{Tool: "govulncheck", Path: "/repo", Reason: "govulncheck: not found in $PATH"},
+	})
+	out := buf.String()
+
+	if !strings.Contains(out, "COVERAGE INCOMPLETE") {
+		t.Errorf("expected an explicit incomplete-coverage marker, got:\n%s", out)
+	}
+	if !strings.Contains(out, "govulncheck") || !strings.Contains(out, "/repo") {
+		t.Errorf("expected the skipped tool's name and path in the report, got:\n%s", out)
+	}
+}
+
+// TestRenderHumanNoSkippedToolsNoCoverageMarker ensures the clean-run path
+// (nothing skipped) doesn't grow a spurious incomplete-coverage line.
+func TestRenderHumanNoSkippedToolsNoCoverageMarker(t *testing.T) {
+	var buf bytes.Buffer
+	RenderHuman(&buf, nil, nil)
+	out := buf.String()
+	if strings.Contains(out, "COVERAGE INCOMPLETE") {
+		t.Errorf("expected no incomplete-coverage marker when nothing was skipped, got:\n%s", out)
 	}
 }

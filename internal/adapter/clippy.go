@@ -13,8 +13,13 @@ import (
 
 type Clippy struct{}
 
-func (Clippy) Name() string         { return "clippy" }
-func (Clippy) CheckInstalled() bool { return commandExists("cargo") }
+func (Clippy) Name() string { return "clippy" }
+
+// CheckInstalled probes for cargo-clippy specifically, not just cargo:
+// `cargo clippy` is a cargo subcommand backed by the separate cargo-clippy
+// binary (installed via `rustup component add clippy`), so cargo being
+// present says nothing about whether the clippy component is.
+func (Clippy) CheckInstalled() bool { return commandExists("cargo-clippy") }
 
 func (Clippy) Install() error {
 	return exec.Command("rustup", "component", "add", "clippy").Run()
