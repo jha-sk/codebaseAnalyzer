@@ -122,6 +122,16 @@ type Targeted interface {
 	RunTargets(path string, targets []string) ([]finding.Finding, error)
 }
 
+// EnvForPath supplies extra environment variables for tool runs against a
+// project path - the toolchain package sets it so each repo is analysed at
+// the language version it declares. Default is nil, which leaves tool runs
+// exactly as they were.
+//
+// ponytail: one package-level hook because there is exactly one producer
+// (internal/toolchain) and every adapter needs it; make it a field on each
+// adapter if a second producer ever needs different behaviour per tool.
+var EnvForPath = func(path string) []string { return nil }
+
 // runCommand executes name with args in dir and returns stdout, respecting
 // DefaultTimeout. Linters commonly exit non-zero when they find issues —
 // that's not a run failure, so a non-zero exit is only treated as success
@@ -140,6 +150,9 @@ func runCommand(dir, name string, args ...string) ([]byte, error) {
 	}
 	cmd := exec.CommandContext(ctx, resolved, args...)
 	cmd.Dir = dir
+	if extra := EnvForPath(dir); len(extra) > 0 {
+		cmd.Env = append(os.Environ(), extra...)
+	}
 	out, err := cmd.Output()
 	if exitErr, ok := err.(*exec.ExitError); ok {
 		if len(bytes.TrimSpace(out)) > 0 {

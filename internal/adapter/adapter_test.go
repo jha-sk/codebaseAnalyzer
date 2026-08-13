@@ -138,6 +138,24 @@ func TestOnlyPackageScopedAdaptersAreTargeted(t *testing.T) {
 	}
 }
 
+// TestEnvForPathReachesTheToolProcess verifies the toolchain hook's
+// variables actually reach the spawned tool process, not just cmd.Env in
+// memory.
+func TestEnvForPathReachesTheToolProcess(t *testing.T) {
+	original := EnvForPath
+	t.Cleanup(func() { EnvForPath = original })
+	EnvForPath = func(string) []string { return []string{"CODEBASE_ANALYSER_PROBE=set"} }
+
+	// Uses `env`, which is present on every platform this test runs on.
+	out, err := runCommand(t.TempDir(), "env")
+	if err != nil {
+		t.Skipf("env not available: %v", err)
+	}
+	if !strings.Contains(string(out), "CODEBASE_ANALYSER_PROBE=set") {
+		t.Error("EnvForPath variables did not reach the tool process")
+	}
+}
+
 // TestComputeGoBinDir_degradesWhenGoUnavailable verifies that when `go`
 // is not available, computeGoBinDir returns "" rather than panicking.
 func TestComputeGoBinDir_degradesWhenGoUnavailable(t *testing.T) {

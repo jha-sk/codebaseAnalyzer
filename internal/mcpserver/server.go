@@ -12,6 +12,7 @@ import (
 
 	"codebase-analyser/internal/adapter"
 	"codebase-analyser/internal/orchestrator"
+	"codebase-analyser/internal/toolchain"
 )
 
 // Version is reported to MCP hosts during initialization. It is a var, not a
@@ -57,6 +58,10 @@ func New(adapters map[string][]adapter.ToolAdapter) *Server {
 			"Requires DASHBOARD_URL and DASHBOARD_TOKEN in this server's environment; the token is " +
 			"never returned to the caller. Takes no arguments.",
 	}, s.push)
+
+	// Analyse each repository at the language version it declares.
+	adapter.EnvForPath = toolchain.Env
+
 	return s
 }
 
