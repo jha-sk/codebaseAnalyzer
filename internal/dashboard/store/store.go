@@ -28,6 +28,10 @@ var schema string
 // 401 (bad ingest token) or 404 (missing repo/run) as appropriate.
 var ErrNotFound = errors.New("not found")
 
+// ErrRepoExists is returned when a repo with the same normalized remote URL is
+// already registered. Callers map it to 409.
+var ErrRepoExists = errors.New("repo already registered")
+
 type Store struct{ db *sql.DB }
 
 type Repo struct {
@@ -150,7 +154,7 @@ func (s *Store) CreateRepo(ctx context.Context, remoteURL string) (Repo, string,
 		 RETURNING id, registered_at`,
 		normalized, hash).Scan(&repo.ID, &repo.RegisteredAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Repo{}, "", fmt.Errorf("repo %s is already registered", normalized)
+		return Repo{}, "", fmt.Errorf("%w: %s", ErrRepoExists, normalized)
 	}
 	if err != nil {
 		return Repo{}, "", fmt.Errorf("insert repo: %w", err)
