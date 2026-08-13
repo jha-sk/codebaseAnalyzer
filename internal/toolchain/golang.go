@@ -2,6 +2,7 @@ package toolchain
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 )
@@ -26,10 +27,23 @@ func (Go) Detect(repoPath string) (string, bool) {
 	return string(m[1]), true
 }
 
-// Ensure leans on Go's own toolchain switching: with GOTOOLCHAIN set to an
-// explicit version, any Go 1.21+ command downloads and runs that version,
-// caching it in the module cache. That is a supported, signed download path -
-// there is no reason to reimplement it.
+// Ensure prefers Go's own toolchain switching, which needs any Go 1.21+ on
+// PATH: with GOTOOLCHAIN set to an explicit version, any such Go downloads
+// and runs that version, caching it in the module cache. That is a
+// supported, signed download path - there is no reason to reimplement it.
+//
+// With no Go at all on PATH, it falls back to a Go we download and manage
+// ourselves, so the analyser works on a machine with no Go installed.
 func (Go) Ensure(version string) ([]string, error) {
-	return []string{"GOTOOLCHAIN=go" + version}, nil
+	if _, err := exec.LookPath("go"); err == nil {
+		return []string{"GOTOOLCHAIN=go" + version}, nil
+	}
+	goroot, err := EnsureGo(version)
+	if err != nil {
+		return nil, err
+	}
+	return []string{
+		"GOROOT=" + goroot,
+		"PATH=" + filepath.Join(goroot, "bin") + string(os.PathListSeparator) + os.Getenv("PATH"),
+	}, nil
 }

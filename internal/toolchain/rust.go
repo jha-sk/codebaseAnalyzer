@@ -2,6 +2,7 @@ package toolchain
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -34,9 +35,25 @@ func (Rust) Detect(repoPath string) (string, bool) {
 	return name, true
 }
 
-// Ensure leans on rustup, which installs a missing toolchain on first use
+// Ensure prefers rustup, which installs a missing toolchain on first use
 // when RUSTUP_TOOLCHAIN names it. Same reasoning as Go's GOTOOLCHAIN: the
 // language ships this machinery, so we do not rebuild it.
+//
+// With no rustup on PATH, it falls back to a rustup we download and manage
+// ourselves (isolated RUSTUP_HOME/CARGO_HOME), so the analyser works on a
+// machine with no Rust installed.
 func (Rust) Ensure(version string) ([]string, error) {
-	return []string{"RUSTUP_TOOLCHAIN=" + version}, nil
+	if _, err := exec.LookPath("rustup"); err == nil {
+		return []string{"RUSTUP_TOOLCHAIN=" + version}, nil
+	}
+	home, err := EnsureRustup()
+	if err != nil {
+		return nil, err
+	}
+	return []string{
+		"RUSTUP_HOME=" + home,
+		"CARGO_HOME=" + home,
+		"PATH=" + filepath.Join(home, "bin") + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"RUSTUP_TOOLCHAIN=" + version,
+	}, nil
 }
