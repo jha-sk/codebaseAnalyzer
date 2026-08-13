@@ -98,6 +98,9 @@ func TestRun_panicIsolation(t *testing.T) {
 	if !panicResult.Skipped || panicResult.Error == nil || !strings.Contains(panicResult.Error.Error(), "panic") {
 		t.Errorf("panicky-tool result = %+v, want Skipped=true with an error mentioning the panic", panicResult)
 	}
+	if panicResult.Path != "/repo" {
+		t.Errorf("panicky-tool Path = %q, want %q", panicResult.Path, "/repo")
+	}
 	// The real point: a sibling adapter in the same Run call still finishes
 	// normally, proving the panic was isolated rather than taking the
 	// process (and every other in-flight adapter) down with it.
@@ -318,5 +321,81 @@ func TestRun_installFailureSharedAcrossProjects(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&calls); got != 1 {
 		t.Errorf("Install called %d times across 2 projects, want 1", got)
+	}
+}
+
+// An absolute path that lies outside the project root should remain absolute
+// rather than becoming a ../../../.. traversal chain, which is less readable
+// and less useful for tools processing the output.
+func TestRun_keepsAbsolutePathsOutsideRoot(t *testing.T) {
+	root := t.TempDir()
+	outsideFile := filepath.Join(filepath.Dir(root), "outside.go")
+
+	projects := []detect.Project{{Path: root, Language: "go"}}
+	adapters := map[string][]adapter.ToolAdapter{
+		"go": {fakeAdapter{name: "outside-tool", installed: true, findings: []finding.Finding{
+			{Tool: "outside-tool", File: outsideFile},
+		}}},
+	}
+
+	results := Run(projects, adapters)
+
+	if len(results) != 1 || len(results[0].Findings) != 1 {
+		t.Fatalf("got %+v, want one result with one finding", results)
+	}
+	if got := results[0].Findings[0].File; got != outsideFile {
+		t.Errorf("File = %q, want %q (absolute path outside root, not traversal chain)", got, outsideFile)
+	}
+}
+
+// A filename that legitimately begins with ".." should not be misclassified
+// as escaping the root. The detector checks for ".." as a path component,
+// not just a string prefix.
+func TestRun_allowsDoubleDotFileNames(t *testing.T) {
+	root := t.TempDir()
+	weirdName := "..hidden.go"
+	weirdFile := filepath.Join(root, weirdName)
+	if err := os.WriteFile(weirdFile, []byte("// test"), 0o644); err != nil {
+		t.Skipf("could not create test file: %v", err)
+	}
+
+	projects := []detect.Project{{Path: root, Language: "go"}}
+	adapters := map[string][]adapter.ToolAdapter{
+		"go": {fakeAdapter{name: "weird-tool", installed: true, findings: []finding.Finding{
+			{Tool: "weird-tool", File: weirdFile},
+		}}},
+	}
+
+	results := Run(projects, adapters)
+
+	if len(results) != 1 || len(results[0].Findings) != 1 {
+		t.Fatalf("got %+v, want one result with one finding", results)
+	}
+	if got := results[0].Findings[0].File; got != weirdName {
+		t.Errorf("File = %q, want %q (relative to root, not misclassified as escaping)", got, weirdName)
+	}
+}
+
+// Absolute paths inside the root must still become relative even after
+// the escape-detection fix. This ensures the fix doesn't regress the
+// core normalization behavior.
+func TestRun_normalizesInsideRootAfterEscapeCheck(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "sub", "file.go")
+
+	projects := []detect.Project{{Path: root, Language: "go"}}
+	adapters := map[string][]adapter.ToolAdapter{
+		"go": {fakeAdapter{name: "abs-tool", installed: true, findings: []finding.Finding{
+			{Tool: "abs-tool", File: file},
+		}}},
+	}
+
+	results := Run(projects, adapters)
+
+	if len(results) != 1 || len(results[0].Findings) != 1 {
+		t.Fatalf("got %+v, want one result with one finding", results)
+	}
+	if got := results[0].Findings[0].File; got != filepath.Join("sub", "file.go") {
+		t.Errorf("File = %q, want %q (relative to root)", got, filepath.Join("sub", "file.go"))
 	}
 }

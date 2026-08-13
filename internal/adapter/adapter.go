@@ -28,6 +28,42 @@ var (
 	goBinDirValue string
 )
 
+// computeGoBinDir resolves the Go bin directory by consulting the Go
+// toolchain's own view via `go env GOBIN GOPATH`. This respects both
+// process environment variables and persistent settings via `go env -w`.
+// If `go` is not available, falls back to os.Getenv for process env vars.
+// Returns "" if neither GOBIN nor GOPATH are set.
+func computeGoBinDir() string {
+	out, err := exec.Command("go", "env", "GOBIN", "GOPATH").Output()
+	if err != nil {
+		// `go` is not installed/reachable; fall back to process environment only.
+		if gobin := os.Getenv("GOBIN"); gobin != "" {
+			return gobin
+		}
+		if gopath := os.Getenv("GOPATH"); gopath != "" {
+			return filepath.Join(gopath, "bin")
+		}
+		return ""
+	}
+
+	lines := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
+	if len(lines) < 2 {
+		return ""
+	}
+
+	// First line is GOBIN (may be empty if not explicitly set anywhere).
+	if gobin := strings.TrimSpace(lines[0]); gobin != "" {
+		return gobin
+	}
+
+	// Second line is GOPATH; use its bin subdir as fallback.
+	if gopath := strings.TrimSpace(lines[1]); gopath != "" {
+		return filepath.Join(gopath, "bin")
+	}
+
+	return ""
+}
+
 // goBinDir returns the directory `go install` places binaries in: $GOBIN if
 // set, else $GOPATH/bin. `go install .../gosec@latest` (see gosec.go et al)
 // puts gosec/golangci-lint/govulncheck there, but that directory is not on
@@ -37,17 +73,7 @@ var (
 // PATH-only behavior rather than panicking.
 func goBinDir() string {
 	goBinDirOnce.Do(func() {
-		if gobin := os.Getenv("GOBIN"); gobin != "" {
-			goBinDirValue = gobin
-			return
-		}
-		out, err := exec.Command("go", "env", "GOPATH").Output()
-		if err != nil {
-			return
-		}
-		if gopath := strings.TrimSpace(string(out)); gopath != "" {
-			goBinDirValue = filepath.Join(gopath, "bin")
-		}
+		goBinDirValue = computeGoBinDir()
 	})
 	return goBinDirValue
 }

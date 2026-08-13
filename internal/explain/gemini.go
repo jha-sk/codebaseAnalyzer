@@ -54,8 +54,19 @@ func (g *GeminiExplainer) Explain(ctx context.Context, tool, ruleID, sampleMessa
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		return Explanation{}, err
 	}
-	if len(parsed.Candidates) == 0 || len(parsed.Candidates[0].Content.Parts) == 0 {
+	// We never set candidateCount, so Gemini returns exactly one candidate;
+	// indexing Candidates[0] isn't a positional gamble the way Parts[0] is.
+	if len(parsed.Candidates) == 0 {
 		return Explanation{}, fmt.Errorf("gemini: empty response")
 	}
-	return parseExplanation(parsed.Candidates[0].Content.Parts[0].Text), nil
+	// The parts array is not guaranteed to have the text part first - Gemini
+	// can emit thought/function-call/inline-data parts ahead of the text part.
+	// Indexing Parts[0] positionally would silently return an empty part
+	// instead of the answer. Select the first part whose Text is non-empty.
+	for _, part := range parsed.Candidates[0].Content.Parts {
+		if part.Text != "" {
+			return parseExplanation(part.Text), nil
+		}
+	}
+	return Explanation{}, fmt.Errorf("gemini: no text part in response")
 }

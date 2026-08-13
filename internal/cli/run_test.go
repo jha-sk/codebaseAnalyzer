@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -16,6 +18,47 @@ func TestExecute_noProjectFound(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error when no go.mod/Cargo.toml found")
+	}
+}
+
+// When no projects are found AND some directories are unreadable, the skipped-
+// path notes must reach the user, not be silently dropped. This surfaces the
+// fact that the result may be incomplete due to permission issues, not just
+// absence of projects.
+func TestExecute_noProjectFoundWithUnreadablePath(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("cannot create unreadable directories as root")
+	}
+
+	tmpdir := t.TempDir()
+	unreadable := filepath.Join(tmpdir, "unreadable")
+	if err := os.Mkdir(unreadable, 0o755); err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
+	t.Cleanup(func() {
+		os.Chmod(unreadable, 0o755) // restore permissions for cleanup
+	})
+	if err := os.Chmod(unreadable, 0o000); err != nil {
+		t.Fatalf("chmod failed: %v", err)
+	}
+
+	var buf bytes.Buffer
+	_, err := Execute(context.Background(), &buf, RunConfig{
+		Path: tmpdir, Format: "human", Severity: finding.SeverityHigh, NoLLM: true,
+	})
+	if err == nil {
+		t.Fatal("expected error when no projects found")
+	}
+
+	// Error message must acknowledge that directories could not be read
+	if !strings.Contains(err.Error(), "could not be read") {
+		t.Fatalf("expected error to mention unreadable directories, got: %v", err)
+	}
+
+	// Skipped-path note must appear in the output (human format writes to w)
+	output := buf.String()
+	if !strings.Contains(output, "skipped unreadable path") {
+		t.Fatalf("expected skipped-path note in output, got: %q", output)
 	}
 }
 

@@ -128,6 +128,19 @@ func Execute(ctx context.Context, w io.Writer, cfg RunConfig) (int, error) {
 		return 1, err
 	}
 	if len(projects) == 0 {
+		// Surface skipped-path notes even though no projects were found,
+		// so the user knows the result may be incomplete.
+		var notes []string
+		for _, s := range skippedPaths {
+			notes = append(notes, "note: skipped unreadable path during detection: "+s)
+		}
+		writeNotes(w, cfg.Format, notes)
+
+		// Return error about no projects found, acknowledging any skipped paths
+		// so the user knows this may be a permission issue, not actual absence.
+		if len(skippedPaths) > 0 {
+			return 1, fmt.Errorf("no Go or Rust project found under %s, and %d directories could not be read", cfg.Path, len(skippedPaths))
+		}
 		return 1, fmt.Errorf("no Go or Rust project found under %s", cfg.Path)
 	}
 

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"sync"
 
 	"codebase-analyser/internal/adapter"
@@ -63,7 +64,7 @@ func Run(projects []detect.Project, adaptersByLang map[string][]adapter.ToolAdap
 func runOne(a adapter.ToolAdapter, path string, inst *installer) (result ToolResult) {
 	defer func() {
 		if r := recover(); r != nil {
-			result = ToolResult{Tool: a.Name(), Skipped: true, Error: fmt.Errorf("panic: %v\n%s", r, debug.Stack())}
+			result = ToolResult{Tool: a.Name(), Path: path, Skipped: true, Error: fmt.Errorf("panic: %v\n%s", r, debug.Stack())}
 		}
 	}()
 
@@ -92,6 +93,10 @@ func runOne(a adapter.ToolAdapter, path string, inst *installer) (result ToolRes
 // resolves ./... against its own working directory) - filepath.Rel errors
 // if exactly one of its two arguments is absolute, so root is resolved to
 // an absolute path first.
+//
+// When a path escapes the root, filepath.Rel succeeds but returns a
+// traversal chain (../../...). To keep those paths readable, we detect
+// escape (first component is "..") and leave the absolute path unchanged.
 func normalizeFilePaths(findings []finding.Finding, root string) {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
@@ -102,7 +107,13 @@ func normalizeFilePaths(findings []finding.Finding, root string) {
 			continue
 		}
 		if rel, err := filepath.Rel(absRoot, f.File); err == nil {
-			findings[i].File = rel
+			// Keep absolute if path escapes the root (first component is "..").
+			// A filename can legitimately start with ".." (e.g., ..hidden.go),
+			// so check for ".." as a path component, not a string prefix.
+			sep := string(filepath.Separator)
+			if rel != ".." && !strings.HasPrefix(rel, ".."+sep) {
+				findings[i].File = rel
+			}
 		}
 	}
 }

@@ -238,6 +238,57 @@ func TestGeminiExplainer_emptyParts(t *testing.T) {
 	}
 }
 
+// TestGeminiExplainer_leadingNonTextPart mirrors the Anthropic
+// leading-thinking-block regression test: Gemini's parts array is not
+// guaranteed to have the text part first (thought/function-call/inline-data
+// parts can precede it). Indexing Parts[0] positionally would return the
+// empty leading part; this pins the fix that selects the first part whose
+// Text is non-empty instead.
+func TestGeminiExplainer_leadingNonTextPart(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"candidates": []map[string]any{{"content": map[string]any{"parts": []map[string]string{
+				{"text": ""},
+				{"text": "Why it matters: X\nFix pattern: Y"},
+			}}}},
+		})
+	}))
+	defer srv.Close()
+
+	e := &GeminiExplainer{APIKey: "test-key", HTTPClient: srv.Client(), BaseURL: srv.URL}
+	exp, err := e.Explain(context.Background(), "gosec", "G101", "sample", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exp.Text != "X" || exp.FixPattern != "Y" {
+		t.Errorf("got %+v, want the later part's content, not the leading empty part's text", exp)
+	}
+}
+
+// TestGeminiExplainer_noPartCarriesText covers a response whose parts all
+// come back with no text (e.g. only a function-call or inline-data part):
+// this must be a real, visible error (so the group falls back to
+// unexplained) rather than a silent empty Explanation with a nil error.
+func TestGeminiExplainer_noPartCarriesText(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"candidates": []map[string]any{{"content": map[string]any{"parts": []map[string]string{
+				{"text": ""},
+			}}}},
+		})
+	}))
+	defer srv.Close()
+
+	e := &GeminiExplainer{APIKey: "test-key", HTTPClient: srv.Client(), BaseURL: srv.URL}
+	exp, err := e.Explain(context.Background(), "gosec", "G101", "sample", 3)
+	if err == nil {
+		t.Fatal("expected an error when no part carries text, not a silent empty Explanation")
+	}
+	if exp != (Explanation{}) {
+		t.Errorf("expected zero-value Explanation on error, got %+v", exp)
+	}
+}
+
 func TestSelectProvider_priorityOrder(t *testing.T) {
 	env := map[string]string{"OPENAI_API_KEY": "o-key", "GEMINI_API_KEY": "g-key"}
 	getenv := func(k string) string { return env[k] }

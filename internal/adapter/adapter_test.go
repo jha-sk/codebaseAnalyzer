@@ -91,3 +91,46 @@ func TestRunCommand_nonZeroExitNoStdout(t *testing.T) {
 		t.Errorf("error = %q, want it to mention stderr text %q", err.Error(), "boom")
 	}
 }
+
+// TestComputeGoBinDir_honorsProcessEnvGOBIN verifies that GOBIN set in
+// the process environment (including via `go env -w`) is honored by
+// consulting the Go toolchain's own view.
+func TestComputeGoBinDir_honorsProcessEnvGOBIN(t *testing.T) {
+	gobin := t.TempDir()
+	t.Setenv("GOBIN", gobin)
+
+	result := computeGoBinDir()
+	if result != gobin {
+		t.Errorf("computeGoBinDir() = %q, want %q (process env GOBIN)", result, gobin)
+	}
+}
+
+// TestComputeGoBinDir_fallsBackToGOPATH verifies that when GOBIN is empty,
+// the resolver falls back to GOPATH/bin.
+func TestComputeGoBinDir_fallsBackToGOPATH(t *testing.T) {
+	gopath := t.TempDir()
+	t.Setenv("GOBIN", "")
+	t.Setenv("GOPATH", gopath)
+
+	result := computeGoBinDir()
+	expected := filepath.Join(gopath, "bin")
+	if result != expected {
+		t.Errorf("computeGoBinDir() = %q, want %q (GOPATH/bin fallback)", result, expected)
+	}
+}
+
+// TestComputeGoBinDir_degradesWhenGoUnavailable verifies that when `go`
+// is not available, computeGoBinDir returns "" rather than panicking.
+func TestComputeGoBinDir_degradesWhenGoUnavailable(t *testing.T) {
+	// Mock unavailability by pointing PATH at a directory with no `go` binary.
+	// This simulates a machine where `go` is not installed.
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("GOBIN", "")
+	t.Setenv("GOPATH", "")
+
+	// Should return "" rather than panic when go command is unavailable.
+	result := computeGoBinDir()
+	if result != "" {
+		t.Errorf("computeGoBinDir() = %q, want empty string when go is unavailable", result)
+	}
+}
