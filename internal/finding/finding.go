@@ -47,6 +47,11 @@ func MeetsThreshold(sev, threshold Severity) bool {
 	return severityRank[sev] >= severityRank[threshold]
 }
 
+// SeverityRank exposes the ordering behind MeetsThreshold so callers can sort
+// findings most-severe-first. An unknown severity ranks 0, below every known
+// one, so it sorts last rather than jumping to the top of a capped list.
+func SeverityRank(s Severity) int { return severityRank[s] }
+
 type Finding struct {
 	File     string
 	Line     int

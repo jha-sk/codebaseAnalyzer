@@ -138,8 +138,12 @@ func Execute(ctx context.Context, w io.Writer, cfg RunConfig) (int, error) {
 
 		// Return error about no projects found, acknowledging any skipped paths
 		// so the user knows this may be a permission issue, not actual absence.
-		if len(skippedPaths) > 0 {
-			return 1, fmt.Errorf("no Go or Rust project found under %s, and %d directories could not be read", cfg.Path, len(skippedPaths))
+		if n := len(skippedPaths); n > 0 {
+			noun := "directories"
+			if n == 1 {
+				noun = "directory"
+			}
+			return 1, fmt.Errorf("no Go or Rust project found under %s, and %d %s could not be read", cfg.Path, n, noun)
 		}
 		return 1, fmt.Errorf("no Go or Rust project found under %s", cfg.Path)
 	}

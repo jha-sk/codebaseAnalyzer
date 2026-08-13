@@ -46,3 +46,12 @@ func TestWithoutExplanation(t *testing.T) {
 		t.Fatalf("got %+v", out)
 	}
 }
+
+func TestSeverityRankOrdersMostSevereFirst(t *testing.T) {
+	if SeverityRank(SeverityCritical) <= SeverityRank(SeverityHigh) {
+		t.Error("critical must outrank high")
+	}
+	if SeverityRank(SeverityLow) <= SeverityRank("bogus") {
+		t.Error("a known severity must outrank an unknown one")
+	}
+}

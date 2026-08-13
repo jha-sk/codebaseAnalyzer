@@ -50,9 +50,10 @@ func TestExecute_noProjectFoundWithUnreadablePath(t *testing.T) {
 		t.Fatal("expected error when no projects found")
 	}
 
-	// Error message must acknowledge that directories could not be read
-	if !strings.Contains(err.Error(), "could not be read") {
-		t.Fatalf("expected error to mention unreadable directories, got: %v", err)
+	// Error message must acknowledge that directories could not be read, and
+	// agree in number with how many there were (exactly one here).
+	if !strings.Contains(err.Error(), "1 directory could not be read") {
+		t.Fatalf("expected error to mention 1 unreadable directory, got: %v", err)
 	}
 
 	// Skipped-path note must appear in the output (human format writes to w)
