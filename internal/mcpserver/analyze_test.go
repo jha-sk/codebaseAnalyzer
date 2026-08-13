@@ -3,6 +3,7 @@ package mcpserver_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -153,5 +154,92 @@ func TestToolsAreDiscoverable(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("analyze_codebase not advertised; got %+v", tools.Tools)
+	}
+}
+
+// manyFindings builds n findings alternating low/critical severity, so a
+// capped response is only correct if it sorted by severity first.
+func manyFindings(n int) []finding.Finding {
+	out := make([]finding.Finding, n)
+	for i := range out {
+		sev := finding.SeverityLow
+		if i%2 == 0 {
+			sev = finding.SeverityCritical
+		}
+		out[i] = finding.Finding{
+			File: fmt.Sprintf("f%03d.go", i), Line: i, Tool: "fake",
+			RuleID: "R", Category: finding.CategoryCorrectness, Severity: sev,
+			Message: "m",
+		}
+	}
+	return out
+}
+
+func TestAnalyzeCapsFindingsButNotCounts(t *testing.T) {
+	dir := goRepo(t)
+	s := mcpserver.New(map[string][]adapter.ToolAdapter{
+		"go": {fakeAdapter{name: "fake", findings: manyFindings(120)}},
+	})
+
+	out, _ := callAnalyze(t, connect(t, s), map[string]any{"path": dir})
+
+	if out.Total != 120 {
+		t.Errorf("Total = %d, want 120 (the cap must not change the totals)", out.Total)
+	}
+	if out.Shown != 50 || len(out.Findings) != 50 {
+		t.Errorf("Shown = %d, len(Findings) = %d, want 50 and 50", out.Shown, len(out.Findings))
+	}
+	if !out.Truncated {
+		t.Error("Truncated = false, want true")
+	}
+	if out.Note == "" {
+		t.Error("Note is empty; a truncated response must say so in words")
+	}
+	if out.Summary["critical"] != 60 || out.Summary["low"] != 60 {
+		t.Errorf("Summary = %v, want 60 critical and 60 low across all findings", out.Summary)
+	}
+	for _, f := range out.Findings {
+		if f.Severity != "critical" {
+			t.Fatalf("capped list contains %s; the top 50 of 60 criticals must all be critical", f.Severity)
+		}
+	}
+}
+
+func TestAnalyzeFiltersBySeverityAndCategory(t *testing.T) {
+	dir := goRepo(t)
+	s := mcpserver.New(map[string][]adapter.ToolAdapter{
+		"go": {fakeAdapter{name: "fake", findings: []finding.Finding{
+			{File: "a.go", Tool: "fake", Category: finding.CategorySecurity, Severity: finding.SeverityCritical},
+			{File: "b.go", Tool: "fake", Category: finding.CategorySecurity, Severity: finding.SeverityLow},
+			{File: "c.go", Tool: "fake", Category: finding.CategoryOperational, Severity: finding.SeverityCritical},
+		}}},
+	})
+	cs := connect(t, s)
+
+	out, _ := callAnalyze(t, cs, map[string]any{"path": dir, "severity": "high"})
+	if out.Total != 2 {
+		t.Errorf("severity=high: Total = %d, want 2", out.Total)
+	}
+
+	out, _ = callAnalyze(t, cs, map[string]any{"path": dir, "category": []string{"security"}})
+	if out.Total != 2 {
+		t.Errorf("category=security: Total = %d, want 2", out.Total)
+	}
+
+	out, _ = callAnalyze(t, cs, map[string]any{"path": dir, "category": []string{"security"}, "severity": "critical"})
+	if out.Total != 1 {
+		t.Errorf("both filters: Total = %d, want 1", out.Total)
+	}
+}
+
+func TestAnalyzeRejectsBadFilterValues(t *testing.T) {
+	dir := goRepo(t)
+	cs := connect(t, mcpserver.New(nil))
+
+	if _, res := callAnalyze(t, cs, map[string]any{"path": dir, "severity": "urgent"}); !res.IsError {
+		t.Error("severity=urgent: IsError = false, want true")
+	}
+	if _, res := callAnalyze(t, cs, map[string]any{"path": dir, "category": []string{"style"}}); !res.IsError {
+		t.Error("category=style: IsError = false, want true")
 	}
 }

@@ -3,6 +3,8 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -15,7 +17,9 @@ import (
 // (`omitempty` keeps it out of the schema's required list), so an agent can
 // call analyze_codebase with no arguments at all.
 type AnalyzeInput struct {
-	Path string `json:"path,omitempty" jsonschema:"path to the repository to analyse; defaults to the server's working directory"`
+	Path     string   `json:"path,omitempty" jsonschema:"path to the repository to analyse; defaults to the server's working directory"`
+	Category []string `json:"category,omitempty" jsonschema:"restrict results to these categories: correctness, concurrency, security, operational"`
+	Severity string   `json:"severity,omitempty" jsonschema:"only return findings at or above this severity: critical, high, medium, low"`
 }
 
 // Finding is the wire shape of one finding. It deliberately omits the
@@ -41,6 +45,9 @@ type SkippedTool struct {
 
 type AnalyzeOutput struct {
 	Total        int            `json:"total"`
+	Shown        int            `json:"shown"`
+	Truncated    bool           `json:"truncated"`
+	Note         string         `json:"note,omitempty"`
 	Summary      map[string]int `json:"summary"`
 	Categories   map[string]int `json:"categories"`
 	Incomplete   bool           `json:"incomplete"`
@@ -48,10 +55,82 @@ type AnalyzeOutput struct {
 	Findings     []Finding      `json:"findings"`
 }
 
+// DefaultMaxFindings caps how many findings are returned in full detail.
+// Counts in Summary/Categories/Total always cover everything.
+const DefaultMaxFindings = 50
+
+// filter applies the caller's category/severity narrowing. It runs before the
+// cap so the cap always selects from what the caller actually asked for.
+func filter(findings []finding.Finding, cats []finding.Category, min finding.Severity) []finding.Finding {
+	allowed := map[finding.Category]bool{}
+	for _, c := range cats {
+		allowed[c] = true
+	}
+	var out []finding.Finding
+	for _, f := range findings {
+		if len(allowed) > 0 && !allowed[f.Category] {
+			continue
+		}
+		if min != "" && !finding.MeetsThreshold(f.Severity, min) {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+// capFindings orders findings most-severe-first and returns at most max of
+// them. The tiebreakers (file, line, ruleID) make the truncation
+// deterministic: the same repo analysed twice returns the same 50.
+func capFindings(fs []finding.Finding, max int) (shown []finding.Finding, truncated bool) {
+	sort.SliceStable(fs, func(i, j int) bool {
+		a, b := fs[i], fs[j]
+		if ra, rb := finding.SeverityRank(a.Severity), finding.SeverityRank(b.Severity); ra != rb {
+			return ra > rb
+		}
+		if a.File != b.File {
+			return a.File < b.File
+		}
+		if a.Line != b.Line {
+			return a.Line < b.Line
+		}
+		return a.RuleID < b.RuleID
+	})
+	if len(fs) <= max {
+		return fs, false
+	}
+	return fs[:max], true
+}
+
+// parseFilters validates the caller's narrowing arguments through the same
+// parsers the CLI uses, so the two front doors accept exactly the same values.
+func parseFilters(in AnalyzeInput) ([]finding.Category, finding.Severity, error) {
+	var cats []finding.Category
+	for _, c := range in.Category {
+		cat, err := finding.ParseCategory(strings.TrimSpace(c))
+		if err != nil {
+			return nil, "", err
+		}
+		cats = append(cats, cat)
+	}
+	if in.Severity == "" {
+		return cats, "", nil
+	}
+	sev, err := finding.ParseSeverity(strings.TrimSpace(in.Severity))
+	if err != nil {
+		return nil, "", err
+	}
+	return cats, sev, nil
+}
+
 func (s *Server) analyze(ctx context.Context, _ *mcp.CallToolRequest, in AnalyzeInput) (*mcp.CallToolResult, AnalyzeOutput, error) {
 	path := in.Path
 	if path == "" {
 		path = "."
+	}
+	cats, minSev, err := parseFilters(in)
+	if err != nil {
+		return nil, AnalyzeOutput{}, err
 	}
 
 	projects, skippedPaths, err := detect.Detect(path)
@@ -66,8 +145,9 @@ func (s *Server) analyze(ctx context.Context, _ *mcp.CallToolRequest, in Analyze
 	for _, p := range skippedPaths {
 		skipped = append(skipped, SkippedTool{Reason: "unreadable path during detection: " + p})
 	}
+	findings = filter(findings, cats, minSev)
 
-	return nil, buildOutput(findings, skipped), nil
+	return nil, buildOutput(findings, skipped, s.maxFindings), nil
 }
 
 // collect splits the orchestrator's per-tool results into findings and
@@ -85,7 +165,7 @@ func collect(results []orchestrator.ToolResult) ([]finding.Finding, []SkippedToo
 	return findings, skipped
 }
 
-func buildOutput(findings []finding.Finding, skipped []SkippedTool) AnalyzeOutput {
+func buildOutput(findings []finding.Finding, skipped []SkippedTool, max int) AnalyzeOutput {
 	out := AnalyzeOutput{
 		Total:        len(findings),
 		Summary:      map[string]int{},
@@ -97,9 +177,22 @@ func buildOutput(findings []finding.Finding, skipped []SkippedTool) AnalyzeOutpu
 	if out.SkippedTools == nil {
 		out.SkippedTools = []SkippedTool{}
 	}
+	// Count every finding before capping: the caller must be able to trust
+	// the totals even when it only sees the top slice.
 	for _, f := range findings {
 		out.Summary[string(f.Severity)]++
 		out.Categories[string(f.Category)]++
+	}
+
+	shown, truncated := capFindings(findings, max)
+	out.Shown = len(shown)
+	out.Truncated = truncated
+	if truncated {
+		out.Note = fmt.Sprintf(
+			"showing the %d most severe of %d findings; %d not shown. Narrow with the category or severity arguments to see the rest.",
+			len(shown), out.Total, out.Total-len(shown))
+	}
+	for _, f := range shown {
 		out.Findings = append(out.Findings, Finding{
 			File: f.File, Line: f.Line, Tool: f.Tool, RuleID: f.RuleID,
 			Category: string(f.Category), Severity: string(f.Severity), Message: f.Message,

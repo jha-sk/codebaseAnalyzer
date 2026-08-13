@@ -17,8 +17,9 @@ import (
 var Version = "0.1.0"
 
 type Server struct {
-	adapters map[string][]adapter.ToolAdapter
-	mcp      *mcp.Server
+	adapters    map[string][]adapter.ToolAdapter
+	maxFindings int
+	mcp         *mcp.Server
 }
 
 // New builds a server. Passing nil adapters uses the real linters
@@ -28,8 +29,9 @@ func New(adapters map[string][]adapter.ToolAdapter) *Server {
 		adapters = orchestrator.DefaultAdapters
 	}
 	s := &Server{
-		adapters: adapters,
-		mcp:      mcp.NewServer(&mcp.Implementation{Name: "codebase-analyser", Version: Version}, nil),
+		adapters:    adapters,
+		maxFindings: DefaultMaxFindings,
+		mcp:         mcp.NewServer(&mcp.Implementation{Name: "codebase-analyser", Version: Version}, nil),
 	}
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: "analyze_codebase",

@@ -6,6 +6,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"io"
 	"log"
 	"os"
 
@@ -20,6 +22,9 @@ func main() {
 	log.SetPrefix("codebase-analyser-mcp: ")
 
 	if err := mcpserver.New(nil).MCP().Run(context.Background(), &mcp.StdioTransport{}); err != nil {
+		if errors.Is(err, io.EOF) {
+			os.Exit(0)
+		}
 		log.Fatal(err)
 	}
 }
