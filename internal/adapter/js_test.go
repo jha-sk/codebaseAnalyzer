@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -127,6 +128,53 @@ func TestBaselineConfigsEmbedded(t *testing.T) {
 	}
 	if _, ok := legacy["rules"]; !ok {
 		t.Error("legacy baseline has no rules block")
+	}
+}
+
+// TestInstallJSTools_RetriesAfterFailureButCachesSuccess is Important 3's
+// regression test. installJSTools used to be a sync.Once: correct for a
+// single CLI invocation, but wrong for cmd/codebase-analyser-mcp, a
+// long-running server - one transient npm failure on the first `analyze`
+// call would permanently disable ESLint/tsc for the rest of the process's
+// life, since sync.Once caches even a failed run forever. installJSTools
+// must retry a failed install on the next call while still caching a
+// successful one permanently (and never re-running after that).
+//
+// jsInstallStep is substituted with a stub so this needs no network access
+// and stays offline-safe under `go test -short`.
+func TestInstallJSTools_RetriesAfterFailureButCachesSuccess(t *testing.T) {
+	origStep := jsInstallStep
+	jsInstallMu.Lock()
+	origDone := jsInstallDone
+	jsInstallDone = false
+	jsInstallMu.Unlock()
+	t.Cleanup(func() {
+		jsInstallStep = origStep
+		jsInstallMu.Lock()
+		jsInstallDone = origDone
+		jsInstallMu.Unlock()
+	})
+
+	calls := 0
+	jsInstallStep = func() error {
+		calls++
+		if calls == 1 {
+			return errors.New("boom: simulated npm install failure")
+		}
+		return nil
+	}
+
+	if err := installJSTools(); err == nil {
+		t.Fatal("installJSTools: got nil error on the first (failing) install, want the simulated failure")
+	}
+	if err := installJSTools(); err != nil {
+		t.Fatalf("installJSTools: retry after a failure = %v, want nil (retry must succeed)", err)
+	}
+	if err := installJSTools(); err != nil {
+		t.Fatalf("installJSTools: third call = %v, want nil (a cached success)", err)
+	}
+	if calls != 2 {
+		t.Fatalf("jsInstallStep called %d times, want 2: one failing call plus one succeeding retry - a cached success must never call it again", calls)
 	}
 }
 

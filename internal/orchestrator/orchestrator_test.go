@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -397,5 +399,25 @@ func TestRun_normalizesInsideRootAfterEscapeCheck(t *testing.T) {
 	}
 	if got := results[0].Findings[0].File; got != filepath.Join("sub", "file.go") {
 		t.Errorf("File = %q, want %q (relative to root)", got, filepath.Join("sub", "file.go"))
+	}
+}
+
+// TestDefaultAdaptersJSTS pins the JS/TS wiring. tsc only appears under
+// "ts": running a type-checker against a repo with no tsconfig.json has
+// nothing to check, and detect only emits "ts" when one is present.
+func TestDefaultAdaptersJSTS(t *testing.T) {
+	names := func(lang string) []string {
+		var out []string
+		for _, a := range DefaultAdapters[lang] {
+			out = append(out, a.Name())
+		}
+		sort.Strings(out)
+		return out
+	}
+	if got, want := names("js"), []string{"eslint", "js-audit"}; !reflect.DeepEqual(got, want) {
+		t.Errorf(`DefaultAdapters["js"] = %v, want %v`, got, want)
+	}
+	if got, want := names("ts"), []string{"eslint", "js-audit", "tsc"}; !reflect.DeepEqual(got, want) {
+		t.Errorf(`DefaultAdapters["ts"] = %v, want %v`, got, want)
 	}
 }

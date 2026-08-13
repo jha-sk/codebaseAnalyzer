@@ -70,7 +70,7 @@ func TestExecute_noProjectFoundWithUnreadablePath(t *testing.T) {
 // Important 5: an invalid --llm-provider must be caught before Detect runs,
 // not after. t.TempDir() has neither go.mod nor Cargo.toml, so if provider
 // validation happened after (or was skipped before) Detect, this would fail
-// with "no Go or Rust project found" instead of the provider error -
+// with "no analysable project found" instead of the provider error -
 // proving the ordering, not just that some error comes back.
 func TestExecute_invalidProviderFailsBeforeDetect(t *testing.T) {
 	var buf bytes.Buffer
@@ -80,7 +80,7 @@ func TestExecute_invalidProviderFailsBeforeDetect(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error for the invalid --llm-provider")
 	}
-	if strings.Contains(err.Error(), "no Go or Rust project") {
+	if strings.Contains(err.Error(), "no analysable project") {
 		t.Fatalf("provider validation must happen before Detect, got: %v", err)
 	}
 }
@@ -97,7 +97,7 @@ func TestExecute_noLLMSkipsProviderValidationEvenWithBogusProvider(t *testing.T)
 	if err == nil {
 		t.Fatal("expected an error (no project found)")
 	}
-	if !strings.Contains(err.Error(), "no Go or Rust project") {
+	if !strings.Contains(err.Error(), "no analysable project") {
 		t.Fatalf("expected the no-project error since --no-llm should skip provider validation, got: %v", err)
 	}
 }
@@ -356,6 +356,25 @@ func TestPushRequiresBothFlags(t *testing.T) {
 	err := cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "--dashboard-token") {
 		t.Errorf("err = %v, want a complaint that --dashboard-token is missing", err)
+	}
+}
+
+// Critical 1: cobra prints a non-empty flag default verbatim in FlagUsages,
+// so if --dashboard-token's default were os.Getenv("ANALYSER_DASHBOARD_TOKEN")
+// (as it used to be), the token would leak into `analyser run --help` output
+// and into any arg-parse error, since SilenceUsage is only set inside RunE,
+// after parsing. This must never happen: the env var is applied to
+// cfg.DashboardToken in code, after parsing, not as the flag's default.
+func TestDashboardTokenEnvVarNeverReachesUsageOutput(t *testing.T) {
+	sentinel := "SUPERSECRET-TOKEN-123"
+	t.Setenv("ANALYSER_DASHBOARD_TOKEN", sentinel)
+
+	cmd := NewRunCmd()
+	if strings.Contains(cmd.UsageString(), sentinel) {
+		t.Fatalf("UsageString leaked the token:\n%s", cmd.UsageString())
+	}
+	if strings.Contains(cmd.Flags().FlagUsages(), sentinel) {
+		t.Fatalf("FlagUsages leaked the token:\n%s", cmd.Flags().FlagUsages())
 	}
 }
 

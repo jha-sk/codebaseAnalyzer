@@ -1,0 +1,8 @@
+{
+  "message": "request to https://registry.npmjs.org/minimist failed, reason: connect ECONNREFUSED 127.0.0.1:9",
+  "error": {
+    "code": "ECONNREFUSED",
+    "summary": "connect ECONNREFUSED 127.0.0.1:9",
+    "detail": ""
+  }
+}

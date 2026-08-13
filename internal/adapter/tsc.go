@@ -31,8 +31,17 @@ func (Tsc) Run(path string) ([]finding.Finding, error) {
 	// here would make the orchestrator report tsc as a *skipped* tool and
 	// degrade the run's exit code to 2, when "this isn't a TypeScript
 	// project" is a perfectly healthy, non-error outcome.
+	//
+	// That reasoning only applies to a CONFIRMED absence, though. Any other
+	// stat error - permission denied being the practical case - is not "no
+	// tsconfig.json here"; it's "there might well be one and we can't tell",
+	// which must surface as a real error (and so a skipped tool with a
+	// reason) rather than silently skip the type-check.
 	if _, err := os.Stat(filepath.Join(path, "tsconfig.json")); err != nil {
-		return nil, nil
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("tsc: stat tsconfig.json: %w", err)
 	}
 	bin := jsBin(path, "tsc")
 	if bin == "" {

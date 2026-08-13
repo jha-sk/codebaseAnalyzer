@@ -79,6 +79,40 @@ func TestESLintFindings_parse(t *testing.T) {
 	}
 }
 
+// TestESLintFindings_realCapture parses real `eslint . -f json` output
+// (ESLint 9.39.0, captured via Task 9 against testdata/fixtures/js-repo plus
+// a deliberately unparseable file, see
+// .superpowers/sdd/2026-08-13-jsts-language-support/real-tool-output/eslint-flat-baseline-fatal.json).
+// It exists to prove eslintFindings against bytes the tool actually emitted,
+// not just a hand-authored fixture: in particular that a fatal parse error
+// really does carry "ruleId": null and "fatal": true, which is what
+// classifyESLintRule's fatal branch depends on.
+func TestESLintFindings_realCapture(t *testing.T) {
+	raw, err := os.ReadFile("testdata/eslint_real_fatal_sample.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings, err := eslintFindings(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 4 {
+		t.Fatalf("got %d findings, want 4: %+v", len(findings), findings)
+	}
+	var fatal *finding.Finding
+	for i := range findings {
+		if findings[i].File == "/repo/src/broken.js" {
+			fatal = &findings[i]
+		}
+	}
+	if fatal == nil {
+		t.Fatalf("no finding for the fatal parse error in broken.js: %+v", findings)
+	}
+	if fatal.RuleID != "fatal" || fatal.Category != finding.CategoryCorrectness || fatal.Severity != finding.SeverityHigh {
+		t.Errorf("fatal finding = %+v", fatal)
+	}
+}
+
 func TestESLintFindings_emptyArray(t *testing.T) {
 	findings, err := eslintFindings(strings.NewReader("[]"))
 	if err != nil {

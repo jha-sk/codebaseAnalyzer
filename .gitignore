@@ -1,4 +1,6 @@
 .superpowers/
 /analyser
+/dashboard
 node_modules/
+.env
 

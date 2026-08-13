@@ -55,17 +55,41 @@ func jsToolsDir() string {
 func baselineFlatConfigPath() string   { return filepath.Join(jsToolsDir(), "eslint.config.mjs") }
 func baselineLegacyConfigPath() string { return filepath.Join(jsToolsDir(), ".eslintrc.json") }
 
-var jsInstallOnce struct {
-	sync.Once
-	err error
-}
+var (
+	jsInstallMu   sync.Mutex
+	jsInstallDone bool
+)
+
+// jsInstallStep performs the actual install. It's a package-level function
+// variable, not a direct call to doInstallJSTools, purely so tests can
+// substitute a fake failing/succeeding step without touching the network -
+// installJSTools itself always calls through it.
+var jsInstallStep = doInstallJSTools
 
 // installJSTools npm-installs jsPinnedPackages into jsToolsDir and drops the
 // baseline configs alongside them. All three JS adapters share the one
-// install, so it runs at most once per process.
+// install.
+//
+// This used to run at most once per process via sync.Once, which is wrong
+// for cmd/codebase-analyser-mcp: that's a long-running server, not a single
+// CLI invocation, so one transient npm blip (network hiccup, registry
+// timeout) on the very first `analyze` call would permanently disable
+// ESLint and tsc for the rest of the process's life. A mutex plus a "done"
+// flag instead: success is cached permanently (no repeat installs once one
+// has succeeded), but a failure is retried by the next caller. The mutex
+// also keeps the install serialised the same way sync.Once did - three
+// adapters must not npm-install into the same jsToolsDir concurrently.
 func installJSTools() error {
-	jsInstallOnce.Do(func() { jsInstallOnce.err = doInstallJSTools() })
-	return jsInstallOnce.err
+	jsInstallMu.Lock()
+	defer jsInstallMu.Unlock()
+	if jsInstallDone {
+		return nil
+	}
+	if err := jsInstallStep(); err != nil {
+		return err
+	}
+	jsInstallDone = true
+	return nil
 }
 
 func doInstallJSTools() error {
@@ -153,6 +177,36 @@ func findUp(start, name string) string {
 			return ""
 		}
 		dir = parent
+	}
+}
+
+// boundedAncestorSearch walks dir and its ancestors, calling check at each
+// level, stopping after the directory that contains .git (that directory
+// itself is still checked first) or the filesystem root, whichever comes
+// first. Used by lockfileExistsAbove (jsaudit.go), which needs to search
+// upward without escaping the repo into the user's home directory or above -
+// a stray lockfile there must not silently change behaviour for every repo
+// on the machine. Mirrors the identical bounded walk repoHasESLintConfig
+// (eslint.go) does for the same reason; that function is left as its own
+// unshared loop rather than rewired onto this helper here.
+func boundedAncestorSearch(dir string, check func(string) bool) bool {
+	d, err := filepath.Abs(dir)
+	if err != nil {
+		d = dir
+	}
+	for {
+		if check(d) {
+			return true
+		}
+		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
+			// d is the repo root; stop here rather than walking past it.
+			return false
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return false
+		}
+		d = parent
 	}
 }
 

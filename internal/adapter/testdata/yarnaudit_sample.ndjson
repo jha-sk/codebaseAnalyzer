@@ -1,0 +1,2 @@
+{"type":"auditAdvisory","data":{"resolution":{"id":1179,"path":"minimist"},"advisory":{"module_name":"minimist","severity":"critical","title":"Prototype Pollution","github_advisory_id":"GHSA-xvch-5gv4-984h","cwe":"CWE-1321"}}}
+{"type":"auditSummary","data":{"vulnerabilities":{"critical":1}}}

@@ -50,8 +50,8 @@ func NewRunCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "run <path>",
-		Short: "Analyse a Go/Rust codebase for production-safety issues",
-		Long: `Analyse a Go/Rust codebase for production-safety issues.
+		Short: "Analyse a Go, Rust, JavaScript or TypeScript codebase for production-safety issues",
+		Long: `Analyse a Go, Rust, JavaScript or TypeScript codebase for production-safety issues.
 
 Exit codes:
   0  clean pass: no finding at/above --severity, full tool coverage
@@ -68,6 +68,9 @@ Exit codes:
 			cfg.Path = args[0]
 			if cfg.Format != "human" && cfg.Format != "json" {
 				return fmt.Errorf("invalid format %q (want human|json)", cfg.Format)
+			}
+			if cfg.DashboardToken == "" {
+				cfg.DashboardToken = os.Getenv("ANALYSER_DASHBOARD_TOKEN")
 			}
 			if cfg.DashboardURL != "" && cfg.DashboardToken == "" {
 				return fmt.Errorf("--dashboard-url needs --dashboard-token (or $ANALYSER_DASHBOARD_TOKEN)")
@@ -103,7 +106,13 @@ Exit codes:
 	cmd.Flags().StringVar(&cfg.LLMProvider, "llm-provider", "", "override provider auto-detection")
 	cmd.Flags().BoolVar(&cfg.NoLLM, "no-llm", false, "skip explanations entirely (raw findings only)")
 	cmd.Flags().StringVar(&cfg.DashboardURL, "dashboard-url", "", "push this run to a dashboard at this base URL")
-	cmd.Flags().StringVar(&cfg.DashboardToken, "dashboard-token", os.Getenv("ANALYSER_DASHBOARD_TOKEN"), "ingest token for --dashboard-url (default $ANALYSER_DASHBOARD_TOKEN)")
+	// Default is deliberately empty, not os.Getenv("ANALYSER_DASHBOARD_TOKEN"):
+	// cobra prints a non-empty default verbatim in FlagUsages, which would put
+	// the secret in `--help` output and in any arg-parse error (SilenceUsage
+	// is only set after parsing, inside RunE). The env var is applied to
+	// cfg.DashboardToken in RunE instead, after parsing, so an explicit flag
+	// still wins and the secret never reaches cobra's usage rendering.
+	cmd.Flags().StringVar(&cfg.DashboardToken, "dashboard-token", "", "ingest token for --dashboard-url (default $ANALYSER_DASHBOARD_TOKEN)")
 	return cmd
 }
 
@@ -153,9 +162,9 @@ func Execute(ctx context.Context, w io.Writer, cfg RunConfig) (int, error) {
 			if n == 1 {
 				noun = "directory"
 			}
-			return 1, fmt.Errorf("no Go or Rust project found under %s, and %d %s could not be read", cfg.Path, n, noun)
+			return 1, fmt.Errorf("no analysable project found under %s (looked for go.mod, Cargo.toml, package.json), and %d %s could not be read", cfg.Path, n, noun)
 		}
-		return 1, fmt.Errorf("no Go or Rust project found under %s", cfg.Path)
+		return 1, fmt.Errorf("no analysable project found under %s (looked for go.mod, Cargo.toml, package.json)", cfg.Path)
 	}
 
 	results := orchestrator.Run(projects, orchestrator.DefaultAdapters)
@@ -220,9 +229,9 @@ func Execute(ctx context.Context, w io.Writer, cfg RunConfig) (int, error) {
 // read from the analysed checkout. Its errors are always treated as warnings
 // by the caller and never affect the process exit code.
 func pushRun(ctx context.Context, cfg RunConfig, results []orchestrator.ToolResult, explained []finding.ExplainedFinding, skippedTools []report.SkippedTool) error {
-	_, branch, commit, err := push.GitMeta(cfg.Path)
+	branch, commit, err := push.GitMeta(cfg.Path)
 	if err != nil {
-		return fmt.Errorf("%s is not a git checkout with an origin remote: %w", cfg.Path, err)
+		return fmt.Errorf("%s: %w", cfg.Path, err)
 	}
 
 	var buf bytes.Buffer

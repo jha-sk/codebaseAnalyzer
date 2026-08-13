@@ -1,0 +1,23 @@
+{
+  "advisories": {
+    "1179": {
+      "module_name": "minimist",
+      "severity": "critical",
+      "title": "Prototype Pollution",
+      "github_advisory_id": "GHSA-xvch-5gv4-984h",
+      "cwe": "CWE-1321",
+      "findings": [{ "version": "0.0.8", "paths": ["a>b>minimist"] }]
+    },
+    "220": {
+      "module_name": "tough-cookie",
+      "severity": "moderate",
+      "title": "Denial of Service",
+      "github_advisory_id": "GHSA-72xf-g2v4-qvf3",
+      "cwe": "CWE-400",
+      "findings": [{ "version": "2.0.0", "paths": ["a>tough-cookie"] }]
+    }
+  },
+  "metadata": {
+    "vulnerabilities": { "critical": 1, "moderate": 1 }
+  }
+}

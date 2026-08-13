@@ -2343,7 +2343,16 @@ In `cmd/analyser/main.go`: `Short: "Analyse Go/Rust codebases..."` → `Short: "
 
 In `internal/cli/run_test.go`: three assertions match on `"no Go or Rust project"` — change each to `"no analysable project"`, including the one inside a comment.
 
-`grep -rn "no Go or Rust project" .` must come back empty except for `internal/mcpserver/` (see below) when you are done.
+**Two greps, not one, because they catch different sites.** The error strings and the help text word it differently, so a single grep misses half the problem — the `Short:`/`Long:` sites live in the cobra command definition and contain no "project" text at all:
+
+```
+grep -rn "no Go or Rust project" .   # must be empty
+grep -rn "Go/Rust" .                 # must be empty, or only where genuinely Go/Rust-specific
+```
+
+**Leave the rest of `Long` exactly as it is.** Only its first line carries the language wording; the remainder documents the three exit codes and must not be reflowed, re-indented or reworded.
+
+`internal/mcpserver/` was already updated by the session that owns it and needs no change — its wording is the wording you are matching.
 
 **Land this wording with the capability, not before it.** The dashboard session declined to make these edits ahead of the feature, and they were right: a CLI that advertises `package.json` support while `detect` still only finds `go.mod` and `Cargo.toml` would tell a Node user "no analysable project found (looked for ... package.json)", which reads as a detection bug rather than an unimplemented feature. Task 1 must be merged before this step.
 

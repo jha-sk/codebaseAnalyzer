@@ -23,6 +23,8 @@ type historyPoint struct {
 	PushedAt  string         `json:"pushed_at"`
 	Counts    map[string]int `json:"counts"`
 	Health    int            `json:"health"`
+	New       int            `json:"new"`
+	Fixed     int            `json:"fixed"`
 }
 
 type currentRun struct {
@@ -100,50 +102,56 @@ func (s *server) dashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// History carries a health score per point so the trend chart and the
-	// health view are reading the same series.
+	// History carries a health score and a new/fixed delta per point so the
+	// trend chart, the health view and the activity feed are all reading the
+	// same series. One bulk fetch serves every run's findings rather than one
+	// query per run (or per current/previous pair).
+	runIDs := make([]int64, len(runs))
 	for i, run := range runs {
-		var prev map[string]int
-		if i > 0 {
-			prev = runs[i-1].Counts
-		}
-		resp.History = append(resp.History, historyPoint{
-			RunID:     run.ID,
-			CommitSHA: run.CommitSHA,
-			PushedAt:  run.PushedAt.UTC().Format("2006-01-02T15:04:05Z"),
-			Counts:    run.Counts,
-			Health:    HealthScore(run.Counts, prev),
-		})
+		runIDs[i] = run.ID
 	}
-
-	current := runs[len(runs)-1]
-	findings, err := s.st.FindingsForRun(ctx, current.ID)
+	findingsByRun, err := s.st.FindingsForRuns(ctx, runIDs)
 	if err != nil {
 		serverError(w, "list findings", err)
 		return
 	}
 
-	// "Since last run" compares the two most recent runs on this branch. With
-	// only one run everything is new and nothing is fixed, which Diff already
-	// yields for a nil previous.
-	var prevCounts map[string]int
-	var prevFindings []store.Finding
-	if len(runs) > 1 {
-		previous := runs[len(runs)-2]
-		prevCounts = previous.Counts
-		if prevFindings, err = s.st.FindingsForRun(ctx, previous.ID); err != nil {
-			serverError(w, "list previous findings", err)
-			return
+	for i, run := range runs {
+		var prevCounts map[string]int
+		var prevFindings []store.Finding
+		if i > 0 {
+			prevCounts = runs[i-1].Counts
+			prevFindings = findingsByRun[runs[i-1].ID]
 		}
+		added, fixed := Diff(prevFindings, findingsByRun[run.ID])
+		resp.History = append(resp.History, historyPoint{
+			RunID:     run.ID,
+			CommitSHA: run.CommitSHA,
+			PushedAt:  run.PushedAt.UTC().Format("2006-01-02T15:04:05Z"),
+			Counts:    run.Counts,
+			Health:    HealthScore(run.Counts, prevCounts),
+			New:       added,
+			Fixed:     fixed,
+		})
 	}
-	added, fixed := Diff(prevFindings, findings)
+
+	current := runs[len(runs)-1]
+	findings := findingsByRun[current.ID]
+	if findings == nil {
+		findings = []store.Finding{}
+	}
+	last := resp.History[len(resp.History)-1]
+	var currentPrevCounts map[string]int
+	if len(runs) > 1 {
+		currentPrevCounts = runs[len(runs)-2].Counts
+	}
 
 	resp.Current = &currentRun{
 		Run:        current,
-		Health:     HealthScore(current.Counts, prevCounts),
-		Deltas:     deltas(current.Counts, prevCounts),
-		New:        added,
-		Fixed:      fixed,
+		Health:     HealthScore(current.Counts, currentPrevCounts),
+		Deltas:     deltas(current.Counts, currentPrevCounts),
+		New:        last.New,
+		Fixed:      last.Fixed,
 		Categories: CategoryCounts(findings),
 		TopFiles:   TopFiles(findings, topFileCount),
 		Findings:   findings,

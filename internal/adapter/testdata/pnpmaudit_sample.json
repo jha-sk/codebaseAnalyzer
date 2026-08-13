@@ -1,0 +1,15 @@
+{
+  "advisories": {
+    "1179": {
+      "module_name": "minimist",
+      "severity": "critical",
+      "title": "Prototype Pollution",
+      "github_advisory_id": "GHSA-xvch-5gv4-984h",
+      "cwe": "CWE-1321",
+      "findings": [{ "version": "0.0.8", "paths": ["a>b>minimist"] }]
+    }
+  },
+  "metadata": {
+    "vulnerabilities": { "critical": 1 }
+  }
+}

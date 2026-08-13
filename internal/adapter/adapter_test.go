@@ -130,10 +130,13 @@ func TestOnlyPackageScopedAdaptersAreTargeted(t *testing.T) {
 			t.Errorf("%s does not implement Targeted", a.Name())
 		}
 	}
-	// Whole-dependency-set scanners have nothing smaller to be restricted to.
-	for _, a := range []ToolAdapter{Govulncheck{}, CargoAudit{}} {
+	// Whole-dependency-set scanners, and tools with no sub-unit the cache's
+	// Unit model can express: ESLint lints a file tree rather than a package
+	// graph, tsc type-checks a whole program, and an audit reads one
+	// lockfile. None of them has anything smaller to be restricted to.
+	for _, a := range []ToolAdapter{Govulncheck{}, CargoAudit{}, ESLint{}, Tsc{}, JSAudit{}} {
 		if _, ok := a.(Targeted); ok {
-			t.Errorf("%s implements Targeted but scans a whole dependency set", a.Name())
+			t.Errorf("%s implements Targeted but has no restrictable sub-unit", a.Name())
 		}
 	}
 }

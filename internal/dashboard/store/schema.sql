@@ -32,6 +32,11 @@ CREATE TABLE IF NOT EXISTS findings (
     explanation TEXT NOT NULL DEFAULT ''
 );
 
+-- CREATE TABLE IF NOT EXISTS above will not alter an already-existing table,
+-- so fix_pattern is added separately: idempotent DDL applied at boot, it
+-- picks up existing deployments the same way a migration would.
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS fix_pattern TEXT NOT NULL DEFAULT '';
+
 CREATE INDEX IF NOT EXISTS findings_run_idx ON findings (run_id);
 CREATE INDEX IF NOT EXISTS runs_branch_idx ON runs (repo_id, branch, pushed_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS repos_token_idx ON repos (ingest_token_hash);

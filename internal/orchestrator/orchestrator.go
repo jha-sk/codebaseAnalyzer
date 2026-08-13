@@ -24,6 +24,11 @@ type ToolResult struct {
 var DefaultAdapters = map[string][]adapter.ToolAdapter{
 	"go":   {adapter.GolangciLint{}, adapter.Gosec{}, adapter.Govulncheck{}},
 	"rust": {adapter.Clippy{}, adapter.CargoAudit{}},
+	// ESLint and the dependency audit apply to any package.json project;
+	// tsc is what "ts" buys, and detect only reports "ts" when a
+	// tsconfig.json is present for it to read.
+	"js": {adapter.ESLint{}, adapter.JSAudit{}},
+	"ts": {adapter.ESLint{}, adapter.Tsc{}, adapter.JSAudit{}},
 }
 
 // Cache lets Run serve part of a tool's work from a previous run. It is an

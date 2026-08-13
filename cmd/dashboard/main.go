@@ -43,6 +43,15 @@ func main() {
 		Addr:              addr,
 		Handler:           api.New(st, adminToken, web.Assets),
 		ReadHeaderTimeout: 10 * time.Second,
+		// Bound connection duration, not just header size: without these, a
+		// slow-drip request (or client that never finishes writing the
+		// response) can hold a connection - and, for ingest, its DB
+		// transaction - open indefinitely. 60s/60s comfortably covers the 32
+		// MiB ingest body cap on any real network; 120s idle keeps keep-alive
+		// connections from accumulating forever.
+		ReadTimeout:  60 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 	log.Printf("dashboard listening on %s", addr)
 	if err := srv.ListenAndServe(); err != nil {

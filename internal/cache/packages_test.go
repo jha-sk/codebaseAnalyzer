@@ -59,3 +59,13 @@ func TestUnitsTreatsARustCrateAsOneUnit(t *testing.T) {
 		t.Fatalf("len(units) = %d, want 1 (one crate, one unit)", len(units))
 	}
 }
+
+func TestUnitsUnknownLanguage(t *testing.T) {
+	units, err := cache.Units(detect.Project{Path: t.TempDir(), Language: "js"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if units != nil {
+		t.Errorf("Units for a js project = %v, want nil", units)
+	}
+}

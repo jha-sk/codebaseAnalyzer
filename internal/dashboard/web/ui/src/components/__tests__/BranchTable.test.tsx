@@ -19,6 +19,24 @@ test('the selected branch is marked, and severity composition is described in te
   expect(screen.getByRole('img', { name: '1 critical, 2 low' })).toBeInTheDocument()
 })
 
+test('a focused row is selected on Enter', async () => {
+  const onSelect = vi.fn()
+  render(<BranchTable branches={[branch(), branch({ name: 'feature' })]} selected="main" onSelect={onSelect} />)
+
+  screen.getByText('feature').closest('tr')!.focus()
+  await userEvent.keyboard('{Enter}')
+  expect(onSelect).toHaveBeenCalledWith('feature')
+})
+
+test('a focused row is selected on Space', async () => {
+  const onSelect = vi.fn()
+  render(<BranchTable branches={[branch(), branch({ name: 'feature' })]} selected="main" onSelect={onSelect} />)
+
+  screen.getByText('feature').closest('tr')!.focus()
+  await userEvent.keyboard(' ')
+  expect(onSelect).toHaveBeenCalledWith('feature')
+})
+
 test('branchHealth weights a critical above a low and clamps at zero', () => {
   expect(branchHealth(counts(0, 0, 0, 0))).toBe(100)
   expect(branchHealth(counts(1, 0, 0, 0))).toBeLessThan(branchHealth(counts(0, 0, 0, 1)))

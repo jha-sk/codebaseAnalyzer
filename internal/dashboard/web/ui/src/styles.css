@@ -102,6 +102,10 @@ table.grid td { padding: 10px 12px 10px 0; border-top: 1px solid var(--grid); fo
 tr.row { cursor: pointer; transition: background .18s var(--ease); }
 tr.row:hover { background: rgba(255, 255, 255, .05); }
 tr.row[aria-selected="true"] { background: rgba(57, 135, 229, .16); }
+/* The page's :focus-visible rule uses a positive outline-offset, which the
+   .scroll-x wrapper's overflow-x: auto can clip on a table row. Pull the
+   outline inward for rows specifically so it stays visible. */
+tr.row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; color: var(--text-2); }
 
 /* Stacked severity bar. The 2px gaps are the spec'd spacer between adjacent
@@ -156,3 +160,68 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 1
 
 .since { display: flex; gap: 30px; align-items: baseline; flex-wrap: wrap; }
 .since .n { font-size: 40px; font-weight: 650; line-height: 1.1; }
+
+.tools { display: grid; gap: 8px; }
+.tool { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.tool .state { width: 9px; height: 9px; border-radius: 50%; }
+.tool.skipped .name { color: var(--muted); text-decoration: line-through; }
+
+.pipe .node { fill: rgba(255, 255, 255, .05); stroke: var(--stroke); }
+.pipe .node.off { fill: none; stroke-dasharray: 4 3; }
+.pipe .label { fill: var(--text); font-size: 10px; }
+.pipe .label.off { fill: var(--muted); }
+.pipe .flow { stroke: var(--accent); stroke-width: 1.4; fill: none; opacity: .75; }
+.pipe .flow.off { stroke: var(--muted); stroke-dasharray: 4 3; opacity: .35; }
+
+.feed { display: grid; }
+.feed .item { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center;
+  padding: 9px 0; border-top: 1px solid var(--grid); cursor: pointer; text-align: left;
+  background: none; border-left: 0; border-right: 0; border-bottom: 0; border-radius: 0; width: 100%; }
+.feed .item:hover { background: rgba(255, 255, 255, .05); transform: none; }
+.feed .delta { font-size: 12px; font-variant-numeric: tabular-nums; }
+
+.finding { border-top: 1px solid var(--grid); }
+.finding .head { display: grid; grid-template-columns: 84px minmax(140px, 220px) 1fr auto; gap: 12px;
+  align-items: baseline; padding: 10px 0; cursor: pointer; text-align: left; width: 100%;
+  background: none; border: 0; border-radius: 0; }
+.finding .head:hover { background: rgba(255, 255, 255, .05); transform: none; }
+.finding .sev { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.finding .sev i { width: 9px; height: 9px; border-radius: 2px; }
+.finding .msg { overflow-wrap: anywhere; }
+.finding .chev { color: var(--muted); transition: transform .25s var(--spring); }
+.finding .head[aria-expanded="true"] .chev { transform: rotate(90deg); }
+/* Accordion via a grid-row transition: no measuring, no max-height guessing. */
+.finding .detail { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .3s var(--ease); }
+.finding .detail.open { grid-template-rows: 1fr; }
+.finding .detail > div { overflow: hidden; }
+.finding .body { padding: 0 0 14px 96px; color: var(--text-2); font-size: 13px; max-width: 74ch; }
+.finding .body .meta { display: block; color: var(--muted); padding-bottom: 8px; }
+.empty { color: var(--muted); padding: 12px 0; }
+
+/* Suggested fix: visually separated from the explanation prose above it -
+   a bordered, monospace block rather than another paragraph, since it's a
+   pattern to apply, not something to read as narrative. */
+.finding .fix { margin-top: 10px; }
+.finding .fix-label { display: block; font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+.finding .fix-pattern { display: block; white-space: pre-wrap; overflow-wrap: anywhere; background: rgba(255, 255, 255, .05); border: 1px solid var(--stroke); border-radius: 8px; padding: 10px 12px; }
+
+/* Demo-data banner: sticky (not fixed) so it stays in normal document flow -
+   first thing a screen reader reaches - while still pinning to the viewport
+   top as the page scrolls, so it can never be scrolled away. The negative
+   margin/calc(width) pair cancels body's 24px padding so it spans edge to
+   edge rather than sitting inset like every other panel. Border color is
+   set inline from theme.ts's STATUS.warning so it stays in sync with every
+   other warning-colored element on the page. */
+.demo-banner {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  width: calc(100% + 48px);
+  margin: -24px -24px 0;
+  padding: 12px 24px;
+  background: var(--panel);
+  border-bottom: 3px solid;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
+  font-size: 13px;
+  line-height: 1.5;
+}

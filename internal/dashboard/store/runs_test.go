@@ -60,6 +60,45 @@ func TestSaveRunStoresCountsToolsAndFindings(t *testing.T) {
 	}
 }
 
+// FixPattern must round-trip through SaveRun/FindingsForRun and
+// FindingsForRuns just like Explanation does: the dashboard's findings view
+// shows "suggested fix" alongside "why it matters".
+func TestSaveRunRoundTripsFixPattern(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	repo, _, _ := s.CreateRepo(ctx, "github.com/acme/widgets")
+
+	findings := []Finding{
+		{File: "a.go", Line: 1, Tool: "gosec", RuleID: "G101", Category: "security", Severity: "high",
+			Message: "hardcoded credential", Explanation: "leaks secrets", FixPattern: "load from a secrets manager instead"},
+		{File: "b.go", Line: 2, Tool: "gosec", RuleID: "G104", Category: "correctness", Severity: "low",
+			Message: "unhandled error", Explanation: "", FixPattern: ""},
+	}
+	runID, err := s.SaveRun(ctx, repo.ID, "main", "abc123", nil, findings)
+	if err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+
+	got, err := s.FindingsForRun(ctx, runID)
+	if err != nil {
+		t.Fatalf("FindingsForRun: %v", err)
+	}
+	if len(got) != 2 || got[0].FixPattern != "load from a secrets manager instead" {
+		t.Fatalf("FindingsForRun = %+v, want the first finding's fix pattern to round-trip", got)
+	}
+	if got[1].FixPattern != "" {
+		t.Errorf("second finding FixPattern = %q, want empty (no LLM fix pattern given)", got[1].FixPattern)
+	}
+
+	grouped, err := s.FindingsForRuns(ctx, []int64{runID})
+	if err != nil {
+		t.Fatalf("FindingsForRuns: %v", err)
+	}
+	if len(grouped[runID]) != 2 || grouped[runID][0].FixPattern != "load from a secrets manager instead" {
+		t.Fatalf("FindingsForRuns = %+v, want the fix pattern to round-trip there too", grouped[runID])
+	}
+}
+
 // The spec's headline ingest requirement: a CI retry pushing the same commit
 // overwrites that run rather than creating a second one.
 func TestSaveRunUpsertsOnSameCommit(t *testing.T) {
@@ -244,5 +283,34 @@ func TestSaveRunRejectsUnknownCategory(t *testing.T) {
 	}
 	if len(runs) != 0 {
 		t.Errorf("got %d runs after a rejected push, want 0 - nothing should have been written", len(runs))
+	}
+}
+
+func TestFindingsForRunsGroupsByRun(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	repo, _, _ := s.CreateRepo(ctx, "github.com/acme/widgets")
+
+	r1, _ := s.SaveRun(ctx, repo.ID, "main", "c1", nil, fixtureFindings(2))
+	r2, _ := s.SaveRun(ctx, repo.ID, "main", "c2", nil, fixtureFindings(3))
+	empty, _ := s.SaveRun(ctx, repo.ID, "main", "c3", nil, nil)
+
+	got, err := s.FindingsForRuns(ctx, []int64{r1, r2, empty})
+	if err != nil {
+		t.Fatalf("FindingsForRuns: %v", err)
+	}
+	if len(got[r1]) != 2 || len(got[r2]) != 3 {
+		t.Errorf("grouping = %d and %d findings, want 2 and 3", len(got[r1]), len(got[r2]))
+	}
+	if _, present := got[empty]; present {
+		t.Error("a run with no findings must be absent from the map, not an empty entry")
+	}
+	if got[r1][0].Tool != "gosec" {
+		t.Errorf("finding not fully scanned: %+v", got[r1][0])
+	}
+
+	none, err := s.FindingsForRuns(ctx, nil)
+	if err != nil || len(none) != 0 {
+		t.Errorf("FindingsForRuns(nil) = %v, %v; want an empty map and no error", none, err)
 	}
 }

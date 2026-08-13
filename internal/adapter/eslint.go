@@ -76,11 +76,46 @@ func eslintFindings(r io.Reader) ([]finding.Finding, error) {
 	return findings, nil
 }
 
-// repoHasESLintConfig reports whether dir has its own ESLint configuration,
-// in any of the forms ESLint recognises: flat config, legacy .eslintrc
-// dotfile, or an "eslintConfig" key in package.json. If the repo has any of
-// these the analyser must never override it with the baseline.
+// repoHasESLintConfig reports whether dir, or an ancestor of dir up to (and
+// including) the directory that contains .git, has an ESLint configuration
+// of its own, in any of the forms ESLint recognises: flat config, legacy
+// .eslintrc dotfile, or an "eslintConfig" key in package.json. If the repo
+// has any of these the analyser must never override it with the baseline.
+//
+// The walk mirrors findUp/jsBin (js.go), which both walk up rather than
+// checking dir alone - without that, a monorepo with only a root-level
+// config would have every member package report "no config", so the
+// analyser's baseline (--no-config-lookup --config <baseline>) would
+// override the team's own rules and suppress ESLint's own ancestor lookup
+// for every single file in the repo.
+//
+// The walk is bounded at the directory containing .git (or the filesystem
+// root, whichever comes first) so it can't escape the repo and pick up an
+// unrelated config from the user's home directory or above.
 func repoHasESLintConfig(dir string) bool {
+	d, err := filepath.Abs(dir)
+	if err != nil {
+		d = dir
+	}
+	for {
+		if dirHasESLintConfig(d) {
+			return true
+		}
+		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
+			// d is the repo root; stop here rather than walking past it.
+			return false
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return false
+		}
+		d = parent
+	}
+}
+
+// dirHasESLintConfig reports whether dir itself (not its ancestors) carries
+// an ESLint configuration, in any of the forms ESLint recognises.
+func dirHasESLintConfig(dir string) bool {
 	names := []string{
 		"eslint.config.js", "eslint.config.mjs", "eslint.config.cjs",
 		"eslint.config.ts", "eslint.config.mts", "eslint.config.cts",
@@ -215,9 +250,12 @@ func (ESLint) Run(path string) ([]finding.Finding, error) {
 	}
 
 	// Routed through runCommand rather than exec.Command directly, like the
-	// real lint invocation below: this is the same hook toolchain uses to
-	// pin a project's Node version (EnvForPath) and the same DefaultTimeout,
-	// not a separate unguarded subprocess.
+	// real lint invocation below: this goes through the same EnvForPath hook
+	// and DefaultTimeout as every other tool run, not a separate unguarded
+	// subprocess. EnvForPath only actually pins a project's Node version
+	// under the MCP server, which assigns it (see internal/mcpserver); the
+	// CLI entry point (internal/cli/run.go) never assigns it, so a CLI run
+	// gets EnvForPath's nil-returning default and whatever Node is on PATH.
 	verOut, _ := runCommand(path, bin, "--version")
 	major := eslintMajorVersion(string(verOut))
 

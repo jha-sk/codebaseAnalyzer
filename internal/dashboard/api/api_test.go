@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -188,6 +189,42 @@ func TestIngestRejectsBadTokensAndInput(t *testing.T) {
 		map[string]any{"commit": "abc123", "report": map[string]any{"findings": []any{}}})
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("missing branch: status %d, want 400", resp.StatusCode)
+	}
+}
+
+// TestIngestRejectsOversizedBranchOrCommit guards the two ingest fields that
+// land in unlimited-retention TEXT columns: without a length check, the only
+// bound on branch/commit is the 32 MiB body cap.
+func TestIngestRejectsOversizedBranchOrCommit(t *testing.T) {
+	srv, _ := newTestServer(t)
+	_, token := registerRepo(t, srv, "github.com/acme/widgets")
+
+	longBranch := map[string]any{
+		"branch": strings.Repeat("b", maxBranchLen+1),
+		"commit": "abc123",
+		"report": map[string]any{"findings": []any{}},
+	}
+	if resp, body := do(t, srv, "POST", "/api/runs", token, longBranch); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("oversized branch: status %d, body %s, want 400", resp.StatusCode, body)
+	}
+
+	longCommit := map[string]any{
+		"branch": "main",
+		"commit": strings.Repeat("c", maxCommitLen+1),
+		"report": map[string]any{"findings": []any{}},
+	}
+	if resp, body := do(t, srv, "POST", "/api/runs", token, longCommit); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("oversized commit: status %d, body %s, want 400", resp.StatusCode, body)
+	}
+
+	// The limits are inclusive: exactly at the bound must still be accepted.
+	atLimit := map[string]any{
+		"branch": strings.Repeat("b", maxBranchLen),
+		"commit": strings.Repeat("c", maxCommitLen),
+		"report": map[string]any{"findings": []any{}},
+	}
+	if resp, body := do(t, srv, "POST", "/api/runs", token, atLimit); resp.StatusCode != http.StatusOK {
+		t.Errorf("branch/commit exactly at the limit: status %d, body %s, want 200", resp.StatusCode, body)
 	}
 }
 

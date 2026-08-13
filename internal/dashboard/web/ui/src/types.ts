@@ -32,6 +32,7 @@ export interface Finding {
   severity: Severity
   message: string
   explanation: string
+  fixPattern: string
 }
 
 export interface HistoryPoint {
@@ -40,10 +41,8 @@ export interface HistoryPoint {
   pushed_at: string
   counts: Counts
   health: number
-  // Sent by the server from Task 9 onward, when historyPoint gains New/Fixed
-  // and the activity feed starts showing a per-run delta. Declared here ahead
-  // of that so the type describes the finished contract; nothing reads these
-  // before Task 9.
+  // Per-run delta vs. the previous run on this branch; the activity feed's
+  // +new/-fixed figures read straight from these.
   new: number
   fixed: number
 }

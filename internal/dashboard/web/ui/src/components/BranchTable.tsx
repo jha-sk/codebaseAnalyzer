@@ -38,7 +38,14 @@ export function BranchTable({ branches, selected, onSelect }: {
                 const status = healthStatus(health)
                 return (
                   <tr key={b.name} className="row" aria-selected={b.name === selected}
-                      onClick={() => onSelect(b.name)}>
+                      tabIndex={0}
+                      onClick={() => onSelect(b.name)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          onSelect(b.name)
+                        }
+                      }}>
                     <td>{b.name}</td>
                     <td className="muted">{relativeTime(b.last_run_at)}</td>
                     <td><code>{b.commit_sha.slice(0, 8)}</code></td>

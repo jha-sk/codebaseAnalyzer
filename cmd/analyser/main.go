@@ -11,7 +11,7 @@ import (
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "analyser",
-		Short: "Analyse Go/Rust codebases for production-safety issues",
+		Short: "Analyse Go, Rust and JS/TS codebases for production-safety issues",
 	}
 	root.AddCommand(cli.NewRunCmd())
 	return root

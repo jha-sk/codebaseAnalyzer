@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
@@ -17,6 +18,14 @@ import (
 // kilobytes; this is the trust-boundary guard that stops an ingest token from
 // being a memory-exhaustion lever.
 const maxBodyBytes = 32 << 20 // 32 MiB
+
+// maxBranchLen and maxCommitLen bound branch and commit as stored: both are
+// TEXT columns with unlimited retention, so without a check here an ingest
+// token could grow them without limit up to maxBodyBytes.
+const (
+	maxBranchLen = 255
+	maxCommitLen = 64
+)
 
 type server struct {
 	st         *store.Store
@@ -188,6 +197,14 @@ func (s *server) ingest(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Branch == "" || req.Commit == "" {
 		httpError(w, http.StatusBadRequest, "branch and commit are required")
+		return
+	}
+	// Both land in unlimited-retention TEXT columns; without a bound here the
+	// only limit is the 32 MiB body cap. The numbers are generous relative to
+	// real git refs (a full SHA-1 or SHA-256 hex commit is at most 64 chars)
+	// and branch names (git itself limits ref components well under 255).
+	if len(req.Branch) > maxBranchLen || len(req.Commit) > maxCommitLen {
+		httpError(w, http.StatusBadRequest, fmt.Sprintf("branch must be <= %d chars and commit <= %d chars", maxBranchLen, maxCommitLen))
 		return
 	}
 

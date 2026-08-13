@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -29,6 +31,7 @@ type Finding struct {
 	Severity    string `json:"severity"`
 	Message     string `json:"message"`
 	Explanation string `json:"explanation"`
+	FixPattern  string `json:"fixPattern"`
 }
 
 type Run struct {
@@ -140,15 +143,15 @@ func (s *Store) SaveRun(ctx context.Context, repoID int64, branch, commitSHA str
 	// tens to low hundreds of findings, so this is milliseconds; switch to
 	// pgx.CopyFrom if a run ever pushes tens of thousands.
 	stmt, err := tx.PrepareContext(ctx,
-		`INSERT INTO findings (run_id, file, line, tool, rule_id, category, severity, message, explanation)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`)
+		`INSERT INTO findings (run_id, file, line, tool, rule_id, category, severity, message, explanation, fix_pattern)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare finding insert: %w", err)
 	}
 	defer stmt.Close()
 	for _, f := range findings {
 		if _, err := stmt.ExecContext(ctx, runID, f.File, f.Line, f.Tool, f.RuleID,
-			f.Category, f.Severity, f.Message, f.Explanation); err != nil {
+			f.Category, f.Severity, f.Message, f.Explanation, f.FixPattern); err != nil {
 			return 0, fmt.Errorf("insert finding %s:%d: %w", f.File, f.Line, err)
 		}
 	}
@@ -244,11 +247,47 @@ func (s *Store) Branches(ctx context.Context, repoID int64) ([]Branch, error) {
 	return branches, rows.Err()
 }
 
+// FindingsForRuns fetches several runs' findings in one query, grouped by run.
+// The activity feed needs a new-vs-fixed delta for every run in the history,
+// which would otherwise be one query per run.
+func (s *Store) FindingsForRuns(ctx context.Context, runIDs []int64) (map[int64][]Finding, error) {
+	out := map[int64][]Finding{}
+	if len(runIDs) == 0 {
+		return out, nil
+	}
+	// The IN list is built from int64s we control - no user input reaches this
+	// string, and database/sql has no portable []int64 binding.
+	ids := make([]string, len(runIDs))
+	for i, id := range runIDs {
+		ids[i] = strconv.FormatInt(id, 10)
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT run_id, file, line, tool, rule_id, category, severity, message, explanation, fix_pattern
+		 FROM findings WHERE run_id IN (`+strings.Join(ids, ",")+`)
+		 ORDER BY run_id, file, line, rule_id, id`)
+	if err != nil {
+		return nil, fmt.Errorf("list findings for runs: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			runID int64
+			f     Finding
+		)
+		if err := rows.Scan(&runID, &f.File, &f.Line, &f.Tool, &f.RuleID, &f.Category,
+			&f.Severity, &f.Message, &f.Explanation, &f.FixPattern); err != nil {
+			return nil, fmt.Errorf("scan finding: %w", err)
+		}
+		out[runID] = append(out[runID], f)
+	}
+	return out, rows.Err()
+}
+
 // FindingsForRun returns a run's findings in a stable order (file, then line),
 // so two renders of the same run never disagree.
 func (s *Store) FindingsForRun(ctx context.Context, runID int64) ([]Finding, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT file, line, tool, rule_id, category, severity, message, explanation
+		`SELECT file, line, tool, rule_id, category, severity, message, explanation, fix_pattern
 		 FROM findings WHERE run_id = $1 ORDER BY file, line, rule_id, id`, runID)
 	if err != nil {
 		return nil, fmt.Errorf("list findings: %w", err)
@@ -258,7 +297,7 @@ func (s *Store) FindingsForRun(ctx context.Context, runID int64) ([]Finding, err
 	for rows.Next() {
 		var f Finding
 		if err := rows.Scan(&f.File, &f.Line, &f.Tool, &f.RuleID, &f.Category,
-			&f.Severity, &f.Message, &f.Explanation); err != nil {
+			&f.Severity, &f.Message, &f.Explanation, &f.FixPattern); err != nil {
 			return nil, fmt.Errorf("scan finding: %w", err)
 		}
 		findings = append(findings, f)

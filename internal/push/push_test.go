@@ -100,9 +100,9 @@ func TestGitMetaReadsThisCheckout(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
-	remote, branch, commit, err := GitMeta("..")
+	branch, commit, err := GitMeta("..")
 	if err != nil {
-		t.Skipf("not a git checkout with a remote: %v", err)
+		t.Skipf("not a git checkout: %v", err)
 	}
 	if len(commit) < 7 {
 		t.Errorf("commit = %q, want a full sha", commit)
@@ -110,16 +110,89 @@ func TestGitMetaReadsThisCheckout(t *testing.T) {
 	if branch == "" {
 		t.Error("branch is empty")
 	}
-	if remote == "" {
-		t.Error("remote is empty")
-	}
 }
 
 func TestGitMetaFailsOutsideARepo(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
-	if _, _, _, err := GitMeta(t.TempDir()); err == nil {
+	if _, _, err := GitMeta(t.TempDir()); err == nil {
 		t.Error("GitMeta succeeded outside a git repository, want an error")
+	}
+}
+
+// pickBranch is the pure fallback-chain logic behind GitMeta's branch
+// resolution. Testing it directly, rather than through GitMeta, lets these
+// cases run without a real (or detached) git checkout.
+func TestPickBranchPrefersGithubRefName(t *testing.T) {
+	got, err := pickBranch("release/1.2", "gitlab-branch", "main", "main")
+	if err != nil {
+		t.Fatalf("pickBranch: %v", err)
+	}
+	if got != "release/1.2" {
+		t.Errorf("got %q, want GITHUB_REF_NAME to win", got)
+	}
+}
+
+func TestPickBranchFallsBackToGitlabRefName(t *testing.T) {
+	got, err := pickBranch("", "gitlab-branch", "main", "main")
+	if err != nil {
+		t.Fatalf("pickBranch: %v", err)
+	}
+	if got != "gitlab-branch" {
+		t.Errorf("got %q, want CI_COMMIT_REF_NAME to win when GITHUB_REF_NAME is unset", got)
+	}
+}
+
+// This is the regression case: a detached HEAD (what actions/checkout
+// leaves by default) makes `git rev-parse --abbrev-ref HEAD` return the
+// literal string "HEAD", which must never be stored as a branch name.
+func TestPickBranchRejectsBareHEAD(t *testing.T) {
+	got, err := pickBranch("", "", "HEAD", "")
+	if err == nil {
+		t.Fatalf("pickBranch returned %q, nil, want an error for a bare HEAD with no other candidate", got)
+	}
+}
+
+func TestPickBranchFallsBackToBranchShowCurrentWhenRevParseIsHEAD(t *testing.T) {
+	got, err := pickBranch("", "", "HEAD", "feature/x")
+	if err != nil {
+		t.Fatalf("pickBranch: %v", err)
+	}
+	if got != "feature/x" {
+		t.Errorf("got %q, want the `git branch --show-current` fallback", got)
+	}
+}
+
+func TestPickBranchUsesRevParseWhenNotHEAD(t *testing.T) {
+	got, err := pickBranch("", "", "main", "")
+	if err != nil {
+		t.Fatalf("pickBranch: %v", err)
+	}
+	if got != "main" {
+		t.Errorf("got %q, want main", got)
+	}
+}
+
+func TestPickBranchErrorsWhenNothingResolves(t *testing.T) {
+	if _, err := pickBranch("", "", "", ""); err == nil {
+		t.Fatal("pickBranch succeeded with no usable candidate, want an error")
+	}
+}
+
+// GitMeta itself must honor GITHUB_REF_NAME even when the underlying
+// checkout is a normal branch (proving env-var precedence end to end, not
+// just in the pure helper).
+func TestGitMetaPrefersGithubRefNameEnvVar(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	t.Setenv("GITHUB_REF_NAME", "env-branch-override")
+	branch, _, err := GitMeta("..")
+	if err != nil {
+		t.Skipf("not a git checkout: %v", err)
+	}
+	if branch != "env-branch-override" {
+		t.Errorf("branch = %q, want the GITHUB_REF_NAME override", branch)
 	}
 }

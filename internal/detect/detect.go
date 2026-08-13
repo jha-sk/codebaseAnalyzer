@@ -81,8 +81,15 @@ func Detect(root string) ([]Project, []string, error) {
 // jsLanguage distinguishes a TypeScript package from a plain JavaScript one
 // by the presence of a tsconfig.json beside the package.json. It is the only
 // thing that decides whether the tsc adapter runs (spec: Detection).
+//
+// Only a confirmed absence (os.IsNotExist) counts as "no tsconfig.json".
+// Any other stat error - permission denied being the practical case - must
+// not silently downgrade a real TypeScript project to plain JS just because
+// its tsconfig.json couldn't be statted; that would quietly skip the
+// project's type-check.
 func jsLanguage(dir string) string {
-	if _, err := os.Stat(filepath.Join(dir, "tsconfig.json")); err == nil {
+	_, err := os.Stat(filepath.Join(dir, "tsconfig.json"))
+	if err == nil || !os.IsNotExist(err) {
 		return "ts"
 	}
 	return "js"

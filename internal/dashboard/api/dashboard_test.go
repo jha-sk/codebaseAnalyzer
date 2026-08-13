@@ -191,3 +191,34 @@ func TestDashboardComparesAgainstTheImmediatelyPreviousRun(t *testing.T) {
 		t.Errorf("deltas = %v, want high -1 and low +1 versus c3", got.Current.Deltas)
 	}
 }
+
+func TestHistoryCarriesNewAndFixedPerRun(t *testing.T) {
+	srv, _ := newTestServer(t)
+	repoID, token := registerRepo(t, srv, "github.com/acme/widgets")
+
+	pushRun(t, srv, token, "main", "c1", []store.Finding{
+		sev("high", "a.go", 1, "G101"),
+		sev("high", "b.go", 2, "G102"),
+	}, nil)
+	pushRun(t, srv, token, "main", "c2", []store.Finding{
+		sev("high", "a.go", 1, "G101"), // carried over
+		sev("low", "c.go", 3, "G104"),  // new
+	}, nil)
+
+	got := getDashboard(t, srv, repoID, "")
+	if len(got.History) != 2 {
+		t.Fatalf("history = %d points, want 2", len(got.History))
+	}
+	if got.History[0].New != 2 || got.History[0].Fixed != 0 {
+		t.Errorf("first run: new=%d fixed=%d, want everything new", got.History[0].New, got.History[0].Fixed)
+	}
+	if got.History[1].New != 1 || got.History[1].Fixed != 1 {
+		t.Errorf("second run: new=%d fixed=%d, want new=1 (c.go) fixed=1 (b.go)", got.History[1].New, got.History[1].Fixed)
+	}
+	// The current-run summary must agree with its own history point.
+	last := got.History[len(got.History)-1]
+	if got.Current.New != last.New || got.Current.Fixed != last.Fixed {
+		t.Errorf("current (new=%d fixed=%d) disagrees with its history point (new=%d fixed=%d)",
+			got.Current.New, got.Current.Fixed, last.New, last.Fixed)
+	}
+}

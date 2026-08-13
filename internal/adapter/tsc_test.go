@@ -1,6 +1,8 @@
 package adapter
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"codebase-analyser/internal/finding"
@@ -89,5 +91,37 @@ func TestTscRun_NoTsconfig(t *testing.T) {
 	}
 	if err != nil {
 		t.Errorf("err = %v, want nil", err)
+	}
+}
+
+// TestTscRun_PermissionDeniedTsconfigIsError is Minor 5's regression test:
+// Run used to treat ANY os.Stat error on tsconfig.json - including
+// permission denied - the same as "not a TypeScript project" and silently
+// skip the type-check. Only a confirmed absence (os.IsNotExist) may skip
+// silently; any other stat error must surface as a real error so it shows
+// up as a skipped tool with a reason instead of a silent pass.
+func TestTscRun_PermissionDeniedTsconfigIsError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: permission bits aren't enforced")
+	}
+	root := t.TempDir()
+	pkg := filepath.Join(root, "pkg")
+	if err := os.MkdirAll(pkg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "tsconfig.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(pkg, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(pkg, 0o755) })
+
+	findings, err := (Tsc{}).Run(pkg)
+	if err == nil {
+		t.Fatalf("err = nil, want an error: a permission-denied tsconfig.json must not be silently skipped as \"not TypeScript\" (findings: %+v)", findings)
+	}
+	if findings != nil {
+		t.Errorf("findings = %+v, want nil alongside the error", findings)
 	}
 }

@@ -9,6 +9,7 @@ export function finding(over: Partial<Finding> = {}): Finding {
     file: 'a.go', line: 4, tool: 'gosec', ruleID: 'G101',
     category: 'security', severity: 'high',
     message: 'hardcoded credential', explanation: 'leaks secrets in the binary',
+    fixPattern: 'os.Getenv("API_KEY")',
     ...over,
   }
 }

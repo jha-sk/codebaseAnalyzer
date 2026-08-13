@@ -67,6 +67,67 @@ func detectLockfile(dir string) (lockfile, manager string) {
 	return "", ""
 }
 
+// lockfileNames are the lockfile filenames detectLockfile recognizes, in the
+// same npm/yarn/pnpm order.
+var lockfileNames = []string{"package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml"}
+
+// lockfileExistsAbove reports whether any recognized lockfile exists at dir
+// or above it - unlike detectLockfile, which deliberately only checks dir
+// itself. Used to tell "this is a workspace member; the root audits the
+// lockfile it shares" apart from "this repo has no lockfile at all".
+//
+// The walk is bounded at the directory containing .git (or the filesystem
+// root, whichever comes first), the same boundary repoHasESLintConfig
+// (eslint.go) uses: unbounded, a stray package-lock.json in $HOME, /tmp or /
+// would silently make every genuinely lockfile-less repo look like a covered
+// workspace member.
+func lockfileExistsAbove(dir string) bool {
+	return boundedAncestorSearch(dir, dirHasLockfile)
+}
+
+// dirHasLockfile reports whether dir itself (not its ancestors) carries one
+// of the lockfile names detectLockfile recognizes.
+func dirHasLockfile(dir string) bool {
+	for _, name := range lockfileNames {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// packageHasDependencies reports whether dir's package.json declares any
+// dependency, in "dependencies" or "devDependencies". A package.json that's
+// missing, unparsable, or declares neither is treated as having none - there
+// is nothing for js-audit to audit either way, so that is not an error case.
+func packageHasDependencies(dir string) bool {
+	data, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	if err != nil {
+		return false
+	}
+	var pkg struct {
+		Dependencies    json.RawMessage `json:"dependencies"`
+		DevDependencies json.RawMessage `json:"devDependencies"`
+	}
+	if json.Unmarshal(data, &pkg) != nil {
+		return false
+	}
+	return jsonObjectHasEntries(pkg.Dependencies) || jsonObjectHasEntries(pkg.DevDependencies)
+}
+
+// jsonObjectHasEntries reports whether raw decodes as a non-empty JSON
+// object. Missing, null, or present-but-empty ("{}") all report false.
+func jsonObjectHasEntries(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil {
+		return false
+	}
+	return len(m) > 0
+}
+
 // jsAuditSeverityTable maps the severity vocabulary shared by npm, yarn and
 // pnpm audit output to the analyser's normalized severity.
 var jsAuditSeverityTable = map[string]finding.Severity{
@@ -87,12 +148,35 @@ func jsSeverity(s string) finding.Severity {
 func (JSAudit) Run(path string) ([]finding.Finding, error) {
 	lockfile, manager := detectLockfile(path)
 	if manager == "" {
-		// No lockfile in this project dir is not an error: in a workspace
-		// the lockfile lives only at the repo root, so every member package
-		// would otherwise report a bogus "skipped tool" and drag the run's
-		// exit code to 2. The root package is detected as its own project
-		// and audits the shared lockfile there exactly once.
-		return nil, nil
+		// No lockfile in this project dir specifically is not automatically
+		// an error: in a workspace the lockfile lives only at the repo
+		// root, so every member package would otherwise report a bogus
+		// "skipped tool" and drag the run's exit code to 2. The root
+		// package is detected as its own project and audits the shared
+		// lockfile there exactly once - so if a lockfile exists anywhere
+		// above this dir, stay silent and let that ancestor project handle
+		// it.
+		//
+		// But if there is no lockfile ANYWHERE up the tree, this may still be
+		// a real lockfile-less repo with something to audit - and that must
+		// not pass as a silent, un-audited "nothing to do". Surface it as an
+		// error so the orchestrator reports js-audit as a skipped tool with
+		// a reason, rather than the dependency tree looking clean by
+		// omission.
+		//
+		// But only when the package actually declares a dependency. A
+		// package.json with no "dependencies"/"devDependencies" (or none at
+		// all) has nothing to audit either way, so erroring there would be
+		// wrong, not honest: every dependency-less package, and every repo
+		// that gitignores its lockfile, would degrade a clean run to "skipped
+		// tool" for no reason.
+		if lockfileExistsAbove(path) {
+			return nil, nil
+		}
+		if !packageHasDependencies(path) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("js-audit: no lockfile (package-lock.json, npm-shrinkwrap.json, yarn.lock or pnpm-lock.yaml) found in %s or any parent directory; dependencies cannot be audited without one", path)
 	}
 
 	var findings []finding.Finding
@@ -167,14 +251,51 @@ func npmAdvisoryRuleID(a npmAdvisory) string {
 // transitive "vulnerable because a dependency is" links. Only object
 // entries turn into per-advisory findings — string entries would produce
 // duplicate findings with no advisory id. A package whose via is entirely
-// strings still gets exactly ONE finding, using the package-level severity
-// and a message naming the transitive path, so it isn't silently dropped.
+// strings (or entirely entries of some other, unrecognised shape) still gets
+// exactly ONE finding, using the package-level severity and a message naming
+// the transitive path (or the package alone), so it isn't silently dropped.
+//
+// Real npm audit ALWAYS emits a top-level "vulnerabilities" key, even on a
+// genuinely clean audit (where it's an empty object) - see
+// pnpmAuditFindings for the identical reasoning applied to pnpm's output.
+// So a payload with no "vulnerabilities" key at all (the field stays nil,
+// distinguishable from a present-but-empty map) is not a clean scan; it's
+// npm's own network/registry/auth failure shape, e.g.
+// {"message":"...ECONNREFUSED...","error":{"summary":"..."}}. That must
+// surface as an error, not a silent zero-findings report - otherwise an
+// offline CI run, a proxy blip, or ENEEDAUTH gets reported as "dependency
+// tree is clean".
 func npmAuditFindings(data []byte) ([]finding.Finding, error) {
 	var parsed npmAuditOutput
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return nil, fmt.Errorf("parsing npm audit output: %w", err)
 	}
+	if parsed.Vulnerabilities == nil {
+		return nil, fmt.Errorf("npm audit: %s", npmAuditErrorMessage(data))
+	}
 	return npmVulnerabilitiesToFindings(parsed.Vulnerabilities), nil
+}
+
+// npmAuditErrorMessage extracts the human-readable reason from npm audit's
+// error payload, preferring the more specific error.summary over the
+// top-level message, so the user sees why the audit failed (ECONNREFUSED,
+// ENEEDAUTH, ...) rather than just that it did.
+func npmAuditErrorMessage(data []byte) string {
+	var errPayload struct {
+		Message string `json:"message"`
+		Error   struct {
+			Summary string `json:"summary"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(data, &errPayload) == nil {
+		if errPayload.Error.Summary != "" {
+			return errPayload.Error.Summary
+		}
+		if errPayload.Message != "" {
+			return errPayload.Message
+		}
+	}
+	return `unrecognised output shape (no "vulnerabilities" key)`
 }
 
 // npmVulnerabilitiesToFindings turns a decoded npm-v7+-shape "vulnerabilities"
@@ -228,38 +349,65 @@ func npmVulnerabilitiesToFindings(vulnerabilities map[string]npmVulnerability) [
 				Severity: jsSeverity(vuln.Severity),
 				Message:  fmt.Sprintf("transitively vulnerable via %s (%s)", via, vuln.Name),
 			})
+		} else if !sawAdvisory && len(vuln.Via) > 0 {
+			// Every "via" entry was neither a string nor an advisory object
+			// (some shape this parser doesn't recognise). Still report one
+			// finding, using the package-level severity, rather than
+			// dropping a flagged package on the floor.
+			findings = append(findings, finding.Finding{
+				Line:     0,
+				Tool:     "js-audit",
+				RuleID:   "",
+				Category: finding.CategorySecurity,
+				Severity: jsSeverity(vuln.Severity),
+				Message:  fmt.Sprintf("flagged as vulnerable (%s)", vuln.Name),
+			})
 		}
 	}
 	return findings
 }
 
-// yarnAuditLine is the shape of one NDJSON line from `yarn audit --json`.
-// Only lines with type "auditAdvisory" carry a finding; every other type
-// ("auditSummary", "info", ...) is ignored.
-type yarnAuditLine struct {
-	Type string `json:"type"`
-	Data struct {
-		Resolution struct {
-			ID int `json:"id"`
-		} `json:"resolution"`
-		Advisory struct {
-			ModuleName       string `json:"module_name"`
-			Severity         string `json:"severity"`
-			Title            string `json:"title"`
-			GithubAdvisoryID string `json:"github_advisory_id"`
-		} `json:"advisory"`
-	} `json:"data"`
+// yarnAuditLineEnvelope is the shape of one NDJSON line from
+// `yarn audit --json`, decoded just enough to route on "type" before
+// decoding "data" into the shape that type implies.
+type yarnAuditLineEnvelope struct {
+	Type string          `json:"type"`
+	Data json.RawMessage `json:"data"`
+}
+
+// yarnAuditAdvisoryData is the "data" shape of an "auditAdvisory" line.
+type yarnAuditAdvisoryData struct {
+	Resolution struct {
+		ID int `json:"id"`
+	} `json:"resolution"`
+	Advisory struct {
+		ModuleName       string `json:"module_name"`
+		Severity         string `json:"severity"`
+		Title            string `json:"title"`
+		GithubAdvisoryID string `json:"github_advisory_id"`
+	} `json:"advisory"`
 }
 
 // yarnAuditFindings parses `yarn audit --json` NDJSON output, one JSON
 // object per line (the same streaming shape clippy.go already decodes for
 // cargo's NDJSON, but line-delimited here rather than a concatenated
 // stream, so it's read with bufio.Scanner rather than json.Decoder). A line
-// that isn't valid JSON, or is JSON of an unrecognized shape, is skipped
-// rather than failing the whole parse — a trailing blank line or a stray
-// log line from yarn must not drop every real advisory around it.
+// that isn't valid JSON at all is skipped rather than failing the whole
+// parse — a trailing blank line or a stray log line from yarn must not drop
+// every real advisory around it.
+//
+// A line of type "error" or "auditError" is different: that's yarn's own
+// shape for a real failure (registry unreachable, auth failed, ...), not an
+// advisory to skip past. It surfaces as an error immediately, carrying
+// yarn's message, rather than silently falling through to (nil, nil) the
+// way an unrecognized-type line does. And if the whole stream ends without
+// a single recognized line (no advisories, no summary, nothing) - e.g. yarn
+// wrote nothing parseable at all - that is treated the same way: an error,
+// not a silent "clean" report. A genuinely clean audit still emits at least
+// an "auditSummary" line, so that case is unaffected.
 func yarnAuditFindings(r io.Reader) ([]finding.Finding, error) {
 	var findings []finding.Finding
+	sawRecognizedLine := false
 	scanner := bufio.NewScanner(r)
 	// yarn audit lines carry full advisory text; grow past bufio.Scanner's
 	// 64KiB default token limit.
@@ -269,25 +417,34 @@ func yarnAuditFindings(r io.Reader) ([]finding.Finding, error) {
 		if len(line) == 0 {
 			continue
 		}
-		var l yarnAuditLine
-		if err := json.Unmarshal(line, &l); err != nil {
+		var env yarnAuditLineEnvelope
+		if err := json.Unmarshal(line, &env); err != nil {
 			continue
 		}
-		if l.Type != "auditAdvisory" {
-			continue
+		switch env.Type {
+		case "auditAdvisory":
+			sawRecognizedLine = true
+			var data yarnAuditAdvisoryData
+			if err := json.Unmarshal(env.Data, &data); err != nil {
+				continue
+			}
+			ruleID := data.Advisory.GithubAdvisoryID
+			if ruleID == "" {
+				ruleID = strconv.Itoa(data.Resolution.ID)
+			}
+			findings = append(findings, finding.Finding{
+				Line:     0,
+				Tool:     "js-audit",
+				RuleID:   ruleID,
+				Category: finding.CategorySecurity,
+				Severity: jsSeverity(data.Advisory.Severity),
+				Message:  fmt.Sprintf("%s (%s)", data.Advisory.Title, data.Advisory.ModuleName),
+			})
+		case "auditSummary", "info":
+			sawRecognizedLine = true
+		case "error", "auditError":
+			return findings, fmt.Errorf("yarn audit: %s", yarnAuditErrorMessage(env.Data))
 		}
-		ruleID := l.Data.Advisory.GithubAdvisoryID
-		if ruleID == "" {
-			ruleID = strconv.Itoa(l.Data.Resolution.ID)
-		}
-		findings = append(findings, finding.Finding{
-			Line:     0,
-			Tool:     "js-audit",
-			RuleID:   ruleID,
-			Category: finding.CategorySecurity,
-			Severity: jsSeverity(l.Data.Advisory.Severity),
-			Message:  fmt.Sprintf("%s (%s)", l.Data.Advisory.Title, l.Data.Advisory.ModuleName),
-		})
 	}
 	if err := scanner.Err(); err != nil {
 		// Return what was already parsed alongside the error rather than
@@ -297,7 +454,33 @@ func yarnAuditFindings(r io.Reader) ([]finding.Finding, error) {
 		// unmarshal skip above already provides for a single malformed line.
 		return findings, fmt.Errorf("parsing yarn audit output: %w", err)
 	}
+	if len(findings) == 0 && !sawRecognizedLine {
+		return nil, fmt.Errorf("yarn audit: no recognisable output (registry unreachable, or audit failed without an error line)")
+	}
 	return findings, nil
+}
+
+// yarnAuditErrorMessage extracts a human-readable message from an
+// "error"/"auditError" line's "data" field, which yarn emits either as a
+// bare string or as an object carrying "message"/"summary".
+func yarnAuditErrorMessage(data json.RawMessage) string {
+	var s string
+	if json.Unmarshal(data, &s) == nil && s != "" {
+		return s
+	}
+	var obj struct {
+		Message string `json:"message"`
+		Summary string `json:"summary"`
+	}
+	if json.Unmarshal(data, &obj) == nil {
+		if obj.Summary != "" {
+			return obj.Summary
+		}
+		if obj.Message != "" {
+			return obj.Message
+		}
+	}
+	return "unknown error"
 }
 
 // pnpmAdvisory is one entry of pnpm audit --json's "advisories" map (legacy

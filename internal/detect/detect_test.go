@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -203,5 +204,93 @@ func TestDetectGoAndJSInSameDir(t *testing.T) {
 	}
 	if len(projects) != 2 {
 		t.Fatalf("got %d projects, want 2: %+v", len(projects), projects)
+	}
+}
+
+// TestDetectJSFixture covers Task 1's plain-JS case: a package.json with no
+// tsconfig.json beside it is Language "js".
+func TestDetectJSFixture(t *testing.T) {
+	projects, skipped, err := Detect("../../testdata/fixtures/js-repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skipped) != 0 {
+		t.Errorf("skipped = %v, want none", skipped)
+	}
+	if len(projects) != 1 || projects[0].Language != "js" {
+		t.Fatalf("got %+v, want exactly one js project", projects)
+	}
+}
+
+// TestDetectTSFixture covers Task 1's TS case: a tsconfig.json beside
+// package.json makes it Language "ts", not "js".
+func TestDetectTSFixture(t *testing.T) {
+	projects, _, err := Detect("../../testdata/fixtures/ts-repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 || projects[0].Language != "ts" {
+		t.Fatalf("got %+v, want exactly one ts project", projects)
+	}
+}
+
+// TestDetectJSMonorepoFixture covers the workspace case: Detect has no
+// special workspace-awareness, so a root package.json plus two member
+// package.json files under packages/ must surface as three separate
+// projects. Asserted by sorted path, since WalkDir order (and therefore
+// projects order) is not part of Detect's contract.
+func TestDetectJSMonorepoFixture(t *testing.T) {
+	projects, _, err := Detect("../../testdata/fixtures/js-monorepo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 3 {
+		t.Fatalf("got %d projects, want 3 (root + packages/a + packages/b): %+v", len(projects), projects)
+	}
+	sort.Slice(projects, func(i, j int) bool { return projects[i].Path < projects[j].Path })
+
+	wantSuffixes := []string{
+		"js-monorepo",
+		filepath.Join("js-monorepo", "packages", "a"),
+		filepath.Join("js-monorepo", "packages", "b"),
+	}
+	for i, want := range wantSuffixes {
+		if !strings.HasSuffix(projects[i].Path, want) {
+			t.Errorf("projects[%d].Path = %q, want suffix %q", i, projects[i].Path, want)
+		}
+		if projects[i].Language != "js" {
+			t.Errorf("projects[%d].Language = %q, want %q", i, projects[i].Language, "js")
+		}
+	}
+}
+
+// TestJSLanguage_PermissionDeniedTsconfigNotTreatedAsAbsent is Minor 5's
+// regression test: jsLanguage used to treat ANY os.Stat error on
+// tsconfig.json - including permission denied - as "no tsconfig.json here",
+// silently downgrading a real TypeScript project to plain JS (and so
+// skipping its tsc type-check) whenever the file merely couldn't be
+// statted. Only a confirmed absence (os.IsNotExist) may report "js"; any
+// other stat error must still report "ts" rather than guess absence.
+func TestJSLanguage_PermissionDeniedTsconfigNotTreatedAsAbsent(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: permission bits aren't enforced")
+	}
+	root := t.TempDir()
+	pkg := filepath.Join(root, "pkg")
+	if err := os.MkdirAll(pkg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "tsconfig.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Strip traversal permission on pkg itself so os.Stat(pkg/tsconfig.json)
+	// fails with permission denied rather than not-exist.
+	if err := os.Chmod(pkg, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(pkg, 0o755) })
+
+	if got := jsLanguage(pkg); got != "ts" {
+		t.Errorf("jsLanguage(permission-denied dir) = %q, want %q (must not silently downgrade to js)", got, "ts")
 	}
 }

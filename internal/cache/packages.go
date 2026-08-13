@@ -29,8 +29,18 @@ var (
 // because clippy type-checks a crate as a whole and cannot report on less
 // than one.
 func Units(project detect.Project) ([]Unit, error) {
-	if project.Language == "rust" {
+	switch project.Language {
+	case "rust":
 		return []Unit{{Dir: project.Path, Target: ".", Exts: rustExts}}, nil
+	case "go":
+		// falls through to the package walk below
+	default:
+		// JS/TS (and any future language) have no unit model here yet, and
+		// none of their adapters implements Targeted, so the orchestrator
+		// never asks. Returning nil here rather than falling into the Go
+		// walk just stops that walk running (and finding nothing) against a
+		// project it has no business inspecting.
+		return nil, nil
 	}
 
 	var units []Unit
