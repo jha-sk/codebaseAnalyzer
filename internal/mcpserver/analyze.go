@@ -141,7 +141,7 @@ func (s *Server) analyze(ctx context.Context, _ *mcp.CallToolRequest, in Analyze
 		return nil, AnalyzeOutput{}, err
 	}
 	if len(projects) == 0 {
-		return nil, AnalyzeOutput{}, fmt.Errorf("no Go or Rust project found under %s", path)
+		return nil, AnalyzeOutput{}, fmt.Errorf("no analysable project found under %s (looked for go.mod, Cargo.toml, package.json)", path)
 	}
 
 	findings, skipped := s.runCached(path, projects)

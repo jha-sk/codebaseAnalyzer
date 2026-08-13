@@ -63,7 +63,7 @@ func TestMCPStdioConformance(t *testing.T) {
 	if !res.IsError {
 		t.Error("analyze_codebase on an empty dir: IsError = false, want true")
 	}
-	if got := textOf(res); !strings.Contains(got, "no Go or Rust project") {
+	if got := textOf(res); !strings.Contains(got, "no analysable project") {
 		t.Errorf("error text = %q, want it to name the missing project", got)
 	}
 
