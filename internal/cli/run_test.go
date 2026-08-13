@@ -3,12 +3,16 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"codebase-analyser/internal/finding"
+	"codebase-analyser/internal/orchestrator"
+	"codebase-analyser/internal/push"
 )
 
 func TestExecute_noProjectFound(t *testing.T) {
@@ -296,6 +300,62 @@ func TestNewRunCmd_invalidCategoryIsAClearError(t *testing.T) {
 	cmd.SetErr(&bytes.Buffer{})
 	if err := cmd.Execute(); err == nil {
 		t.Fatal("expected error for invalid --category")
+	}
+}
+
+func TestToolStatusesDedupesAcrossProjects(t *testing.T) {
+	// A repo with two Go projects runs each adapter twice. The dashboard
+	// wants one row per tool, and a tool that was skipped anywhere must not
+	// be reported as having run cleanly.
+	results := []orchestrator.ToolResult{
+		{Tool: "gosec"},
+		{Tool: "gosec", Skipped: true, Error: errors.New("install failed")},
+		{Tool: "golangci-lint"},
+	}
+	got := toolStatuses(results)
+	if len(got) != 2 {
+		t.Fatalf("got %d statuses, want one per distinct tool: %+v", len(got), got)
+	}
+	byName := map[string]push.ToolStatus{}
+	for _, s := range got {
+		byName[s.Name] = s
+	}
+	if !byName["gosec"].Skipped || byName["gosec"].Error != "install failed" {
+		t.Errorf("gosec = %+v, want skipped with its reason", byName["gosec"])
+	}
+	if byName["golangci-lint"].Skipped {
+		t.Errorf("golangci-lint = %+v, want not skipped", byName["golangci-lint"])
+	}
+	// Order must be stable so a re-push does not churn the stored JSON.
+	if got[0].Name != "golangci-lint" || got[1].Name != "gosec" {
+		t.Errorf("order = %s,%s, want alphabetical", got[0].Name, got[1].Name)
+	}
+}
+
+func TestToolStatusesPicksTheSameReasonEveryTime(t *testing.T) {
+	results := []orchestrator.ToolResult{
+		{Tool: "gosec", Path: "./b", Skipped: true, Error: errors.New("timed out")},
+		{Tool: "gosec", Path: "./a", Skipped: true, Error: errors.New("config invalid")},
+	}
+	first := toolStatuses(results)
+	// Reversed arrival order must not change the stored reason.
+	reversed := toolStatuses([]orchestrator.ToolResult{results[1], results[0]})
+	if len(first) != 1 || len(reversed) != 1 {
+		t.Fatalf("got %d and %d statuses, want one per tool", len(first), len(reversed))
+	}
+	if first[0].Error != reversed[0].Error {
+		t.Errorf("reason depends on arrival order: %q vs %q", first[0].Error, reversed[0].Error)
+	}
+}
+
+func TestPushRequiresBothFlags(t *testing.T) {
+	cmd := NewRunCmd()
+	cmd.SetArgs([]string{t.TempDir(), "--dashboard-url", "http://localhost:9999"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "--dashboard-token") {
+		t.Errorf("err = %v, want a complaint that --dashboard-token is missing", err)
 	}
 }
 

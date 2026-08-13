@@ -4,10 +4,12 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os"
+	"sort"
 
 	"github.com/spf13/cobra"
 
@@ -15,16 +17,19 @@ import (
 	"codebase-analyser/internal/explain"
 	"codebase-analyser/internal/finding"
 	"codebase-analyser/internal/orchestrator"
+	"codebase-analyser/internal/push"
 	"codebase-analyser/internal/report"
 )
 
 type RunConfig struct {
-	Path        string
-	Format      string
-	Severity    finding.Severity
-	Categories  []finding.Category
-	LLMProvider string
-	NoLLM       bool
+	Path           string
+	Format         string
+	Severity       finding.Severity
+	Categories     []finding.Category
+	LLMProvider    string
+	NoLLM          bool
+	DashboardURL   string
+	DashboardToken string
 }
 
 // ExitError carries a specific process exit code back through cobra's
@@ -64,6 +69,9 @@ Exit codes:
 			if cfg.Format != "human" && cfg.Format != "json" {
 				return fmt.Errorf("invalid format %q (want human|json)", cfg.Format)
 			}
+			if cfg.DashboardURL != "" && cfg.DashboardToken == "" {
+				return fmt.Errorf("--dashboard-url needs --dashboard-token (or $ANALYSER_DASHBOARD_TOKEN)")
+			}
 			sev, err := finding.ParseSeverity(severityFlag)
 			if err != nil {
 				return err
@@ -94,6 +102,8 @@ Exit codes:
 	cmd.Flags().StringSliceVar(&categoryFlags, "category", nil, "restrict to categories (default: all)")
 	cmd.Flags().StringVar(&cfg.LLMProvider, "llm-provider", "", "override provider auto-detection")
 	cmd.Flags().BoolVar(&cfg.NoLLM, "no-llm", false, "skip explanations entirely (raw findings only)")
+	cmd.Flags().StringVar(&cfg.DashboardURL, "dashboard-url", "", "push this run to a dashboard at this base URL")
+	cmd.Flags().StringVar(&cfg.DashboardToken, "dashboard-token", os.Getenv("ANALYSER_DASHBOARD_TOKEN"), "ingest token for --dashboard-url (default $ANALYSER_DASHBOARD_TOKEN)")
 	return cmd
 }
 
@@ -188,7 +198,80 @@ func Execute(ctx context.Context, w io.Writer, cfg RunConfig) (int, error) {
 		report.RenderHuman(w, explained, skippedTools)
 	}
 
+	// The push is the last thing that happens and is deliberately unable to
+	// affect the outcome: its failures are warnings routed through the same
+	// writeNotes helper (so --format json keeps stdout pure), and the exit
+	// code below is computed from the findings either way. This is
+	// load-bearing, not incidental: pushRun's error must always be swallowed
+	// into a warning and must never become a `return` here, because exit 2
+	// means the analysis itself was incomplete, and a dashboard outage says
+	// nothing about the analysis.
+	if cfg.DashboardURL != "" {
+		if err := pushRun(ctx, cfg, results, explained, skippedTools); err != nil {
+			writeNotes(w, cfg.Format, []string{fmt.Sprintf("warning: dashboard push failed: %v", err)})
+		}
+	}
+
 	return computeExitCode(explained, cfg.Severity, len(skippedTools) > 0), nil
+}
+
+// pushRun re-renders the report as JSON (regardless of --format, since the
+// dashboard's wire format is the JSON report) and sends it with git metadata
+// read from the analysed checkout. Its errors are always treated as warnings
+// by the caller and never affect the process exit code.
+func pushRun(ctx context.Context, cfg RunConfig, results []orchestrator.ToolResult, explained []finding.ExplainedFinding, skippedTools []report.SkippedTool) error {
+	_, branch, commit, err := push.GitMeta(cfg.Path)
+	if err != nil {
+		return fmt.Errorf("%s is not a git checkout with an origin remote: %w", cfg.Path, err)
+	}
+
+	var buf bytes.Buffer
+	if err := report.RenderJSON(&buf, explained, skippedTools); err != nil {
+		return fmt.Errorf("render report for push: %w", err)
+	}
+	return push.Send(ctx, cfg.DashboardURL, cfg.DashboardToken, branch, commit, toolStatuses(results), buf.Bytes())
+}
+
+// toolStatuses collapses per-project results into one row per tool, which is
+// what the dashboard's tool-status view shows. report.SkippedTool only lists
+// tools that failed; this also captures tools that ran cleanly, and a tool
+// skipped for any project is reported as skipped overall - "it ran
+// somewhere" would hide exactly the missing coverage the view exists to
+// surface. Sorted so a re-push of the same commit stores byte-identical
+// JSON.
+func toolStatuses(results []orchestrator.ToolResult) []push.ToolStatus {
+	// Results arrive from concurrent goroutines in nondeterministic order.
+	// Sort before folding so that when one tool is skipped for several
+	// projects with different reasons, the reason we keep is always the same
+	// one - a re-push of the same commit must store byte-identical JSON.
+	// Copy first: Execute still uses results afterwards, and reordering the
+	// caller's slice under them would be a nasty surprise.
+	ordered := append([]orchestrator.ToolResult(nil), results...)
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].Tool != ordered[j].Tool {
+			return ordered[i].Tool < ordered[j].Tool
+		}
+		return ordered[i].Path < ordered[j].Path
+	})
+
+	byName := map[string]push.ToolStatus{}
+	for _, r := range ordered {
+		existing, seen := byName[r.Tool]
+		if seen && existing.Skipped {
+			continue
+		}
+		status := push.ToolStatus{Name: r.Tool, Skipped: r.Skipped}
+		if r.Error != nil {
+			status.Error = r.Error.Error()
+		}
+		byName[r.Tool] = status
+	}
+	out := make([]push.ToolStatus, 0, len(byName))
+	for _, s := range byName {
+		out = append(out, s)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // writeNotes surfaces diagnostic notes (skipped tools, no LLM provider
