@@ -147,6 +147,13 @@ func (s *Server) analyze(ctx context.Context, _ *mcp.CallToolRequest, in Analyze
 	}
 	findings = filter(findings, cats, minSev)
 
+	// Remember the unfiltered, uncapped run for push_to_dashboard. It is
+	// recorded after filtering deliberately: the agent asked for this view,
+	// and pushing a different set than it just saw would be surprising.
+	s.mu.Lock()
+	s.last = &lastRun{path: path, findings: findings, skipped: toReportSkipped(skipped)}
+	s.mu.Unlock()
+
 	return nil, buildOutput(findings, skipped, s.maxFindings), nil
 }
 

@@ -8,6 +8,10 @@ import (
 	"codebase-analyser/internal/finding"
 )
 
+// testdata/cargoaudit_sample.json is derived from real `cargo audit --json`
+// captures (RUSTSEC-2020-0071 in vulnerabilities.list, RUSTSEC-2020-0016 in
+// warnings.unmaintained) plus a fabricated "unsound" and unrecognized-kind
+// entry to exercise the rest of the severity table.
 func TestCargoAudit_parse(t *testing.T) {
 	raw, err := os.ReadFile("testdata/cargoaudit_sample.json")
 	if err != nil {
@@ -19,24 +23,45 @@ func TestCargoAudit_parse(t *testing.T) {
 	}
 	findings := cargoAuditFindings(parsed)
 
-	if len(findings) != 3 {
-		t.Fatalf("got %d findings, want 3", len(findings))
-	}
-	f := findings[0]
-	if f.RuleID != "RUSTSEC-2021-0001" || f.File != "Cargo.lock" {
-		t.Errorf("finding = %+v", f)
-	}
-	if f.Category != finding.CategorySecurity || f.Severity != finding.SeverityHigh {
-		t.Errorf("category/severity = %v/%v", f.Category, f.Severity)
+	// 1 real vulnerability + 3 warnings kinds (unmaintained, unsound, some-future-kind).
+	if len(findings) != 4 {
+		t.Fatalf("got %d findings, want 4: %+v", len(findings), findings)
 	}
 
-	unmaintained := findings[1]
-	if unmaintained.RuleID != "RUSTSEC-2022-0002" || unmaintained.Severity != finding.SeverityLow {
-		t.Errorf("finding[1] = %+v, want RUSTSEC-2022-0002/low (informational: unmaintained)", unmaintained)
+	byRuleID := make(map[string]finding.Finding, len(findings))
+	for _, f := range findings {
+		byRuleID[f.RuleID] = f
 	}
 
-	unrecognized := findings[2]
-	if unrecognized.RuleID != "RUSTSEC-2023-0003" || unrecognized.Severity != finding.SeverityMedium {
-		t.Errorf("finding[2] = %+v, want RUSTSEC-2023-0003/medium (unrecognized informational falls back to medium)", unrecognized)
+	vuln, ok := byRuleID["RUSTSEC-2020-0071"]
+	if !ok {
+		t.Fatalf("missing RUSTSEC-2020-0071 (real vulnerability) in %+v", findings)
+	}
+	if vuln.Severity != finding.SeverityHigh || vuln.Category != finding.CategorySecurity || vuln.File != "Cargo.lock" {
+		t.Errorf("vulnerability finding = %+v, want severity high/category security/file Cargo.lock", vuln)
+	}
+
+	unmaintained, ok := byRuleID["RUSTSEC-2020-0016"]
+	if !ok {
+		t.Fatalf("missing RUSTSEC-2020-0016 (warnings.unmaintained) in %+v", findings)
+	}
+	if unmaintained.Severity != finding.SeverityLow {
+		t.Errorf("unmaintained finding severity = %v, want low", unmaintained.Severity)
+	}
+
+	unsound, ok := byRuleID["RUSTSEC-2021-0145"]
+	if !ok {
+		t.Fatalf("missing RUSTSEC-2021-0145 (warnings.unsound) in %+v", findings)
+	}
+	if unsound.Severity != finding.SeverityMedium {
+		t.Errorf("unsound finding severity = %v, want medium", unsound.Severity)
+	}
+
+	unrecognized, ok := byRuleID["RUSTSEC-9999-0001"]
+	if !ok {
+		t.Fatalf("missing RUSTSEC-9999-0001 (warnings.some-future-kind) in %+v", findings)
+	}
+	if unrecognized.Severity != finding.SeverityMedium {
+		t.Errorf("unrecognized-kind finding severity = %v, want medium (fallback)", unrecognized.Severity)
 	}
 }

@@ -1,18 +1,62 @@
 {
   "vulnerabilities": {
     "found": true,
+    "count": 1,
     "list": [
       {
-        "advisory": {"id": "RUSTSEC-2021-0001", "title": "Use-after-free in vulnerable-crate"},
-        "package": {"name": "vulnerable-crate"}
-      },
+        "advisory": {
+          "id": "RUSTSEC-2020-0071",
+          "title": "Potential segfault in the time crate",
+          "informational": null
+        },
+        "package": {
+          "name": "time",
+          "version": "0.1.44"
+        }
+      }
+    ]
+  },
+  "warnings": {
+    "unmaintained": [
       {
-        "advisory": {"id": "RUSTSEC-2022-0002", "title": "unmaintained-crate is unmaintained", "informational": "unmaintained"},
-        "package": {"name": "unmaintained-crate"}
-      },
+        "kind": "unmaintained",
+        "advisory": {
+          "id": "RUSTSEC-2020-0016",
+          "title": "`net2` crate has been deprecated; use `socket2` instead",
+          "informational": "unmaintained"
+        },
+        "package": {
+          "name": "net2",
+          "version": "0.2.37"
+        }
+      }
+    ],
+    "unsound": [
       {
-        "advisory": {"id": "RUSTSEC-2023-0003", "title": "weird-crate has an odd informational value", "informational": "something-unrecognized"},
-        "package": {"name": "weird-crate"}
+        "kind": "unsound",
+        "advisory": {
+          "id": "RUSTSEC-2021-0145",
+          "title": "`atty` potential unaligned read",
+          "informational": "unsound"
+        },
+        "package": {
+          "name": "atty",
+          "version": "0.2.14"
+        }
+      }
+    ],
+    "some-future-kind": [
+      {
+        "kind": "some-future-kind",
+        "advisory": {
+          "id": "RUSTSEC-9999-0001",
+          "title": "hypothetical future informational kind",
+          "informational": "some-future-kind"
+        },
+        "package": {
+          "name": "some-crate",
+          "version": "1.0.0"
+        }
       }
     ]
   }
