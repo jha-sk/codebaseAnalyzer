@@ -375,3 +375,48 @@ func TestGenuineSkipStillSurfacesAlongsideCacheHits(t *testing.T) {
 		t.Errorf("the genuinely skipped tool vanished from SkippedTools: %+v", second.SkippedTools)
 	}
 }
+
+// TestProjectWithNoCacheableUnitsStillRunsTheTool guards a false clean.
+//
+// cache.Units returns nothing for a project it has no unit model for - a
+// language it cannot walk, or a layout where every candidate directory was
+// skipped. If Lookup reported that as a successful cache consultation, there
+// would be nothing stale and nothing cached, the tool would never be invoked,
+// and the empty result would be reported as a complete analysis with zero
+// findings. A clean bill of health for a repo nobody looked at.
+func TestProjectWithNoCacheableUnitsStillRunsTheTool(t *testing.T) {
+	t.Setenv("CODEBASE_ANALYSER_CACHE", t.TempDir())
+
+	// go.mod at the root, but every .go file lives under testdata/, which
+	// cache.Units skips - so the project enumerates zero units.
+	dir := goRepo(t)
+	if err := os.MkdirAll(filepath.Join(dir, "testdata"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "testdata", "x.go"), []byte("package x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var runs [][]string
+	s := mcpserver.New(map[string][]adapter.ToolAdapter{
+		"go": {countingAdapter{
+			fakeAdapter: fakeAdapter{name: "fake", findings: []finding.Finding{
+				{File: "testdata/x.go", Line: 1, Tool: "fake", RuleID: "R1",
+					Category: finding.CategoryCorrectness, Severity: finding.SeverityHigh, Message: "m"},
+			}},
+			runs: &runs,
+		}},
+	})
+	cs := connect(t, s)
+
+	out, res := callAnalyze(t, cs, map[string]any{"path": dir})
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %+v", res.Content)
+	}
+	if out.Total != 1 {
+		t.Errorf("Total = %d, want 1 - a project with no cacheable units must still be analysed, not reported clean", out.Total)
+	}
+	if out.Incomplete {
+		t.Error("Incomplete = true; the tool ran fine, it just could not be cached")
+	}
+}

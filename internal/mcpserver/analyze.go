@@ -241,6 +241,15 @@ func (a analysisCache) Lookup(tool string, p detect.Project) (stale []string, ca
 	if err != nil {
 		return nil, nil, false
 	}
+	if len(units) == 0 {
+		// No units means no unit model for this project - a language Units
+		// has no walk for, or a layout where every candidate directory was
+		// skipped. Caching it would report "nothing stale, nothing cached",
+		// so the tool would never run and the empty result would render as a
+		// complete, clean analysis. Disable caching and run in full instead:
+		// a redundant run costs time, a false clean costs trust.
+		return nil, nil, false
+	}
 	stamp := cache.ToolStamp(tool)
 	for _, u := range units {
 		fp, err := cache.Fingerprint(u.Dir, u.Exts)
