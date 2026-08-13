@@ -3,6 +3,8 @@ package detect
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"testing"
 )
 
@@ -97,5 +99,109 @@ func TestDetectUnreadableDirSkippedNotFatal(t *testing.T) {
 	}
 	if len(skipped) == 0 {
 		t.Fatal("expected the unreadable directory to be reported in the skipped list")
+	}
+}
+
+func TestDetectJSAndTS(t *testing.T) {
+	root := t.TempDir()
+	jsDir := filepath.Join(root, "web")
+	tsDir := filepath.Join(root, "api")
+	os.MkdirAll(jsDir, 0o755)
+	os.MkdirAll(tsDir, 0o755)
+	os.WriteFile(filepath.Join(jsDir, "package.json"), []byte(`{"name":"web"}`), 0o644)
+	os.WriteFile(filepath.Join(tsDir, "package.json"), []byte(`{"name":"api"}`), 0o644)
+	os.WriteFile(filepath.Join(tsDir, "tsconfig.json"), []byte(`{}`), 0o644)
+
+	projects, _, err := Detect(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byLang := map[string]string{}
+	for _, p := range projects {
+		byLang[p.Language] = p.Path
+	}
+	if len(projects) != 2 {
+		t.Fatalf("got %d projects, want 2: %+v", len(projects), projects)
+	}
+	if byLang["js"] != jsDir {
+		t.Errorf("js project path = %q, want %q", byLang["js"], jsDir)
+	}
+	// A package.json with a tsconfig.json beside it is a TypeScript project:
+	// that is what enables the tsc step, and it must not also be reported
+	// as a plain "js" project or ESLint would run against it twice.
+	if byLang["ts"] != tsDir {
+		t.Errorf("ts project path = %q, want %q", byLang["ts"], tsDir)
+	}
+}
+
+// TestDetectSkipsGeneratedDirs covers the spec's excluded paths: a
+// package.json inside a dependency tree or a build output directory is not a
+// project anyone asked to analyse.
+func TestDetectSkipsGeneratedDirs(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"name":"app"}`), 0o644)
+	for _, dir := range []string{"node_modules/left-pad", "dist", "build", ".next", "out", "coverage"} {
+		full := filepath.Join(root, filepath.FromSlash(dir))
+		os.MkdirAll(full, 0o755)
+		os.WriteFile(filepath.Join(full, "package.json"), []byte(`{"name":"junk"}`), 0o644)
+	}
+
+	projects, _, err := Detect(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 || projects[0].Path != root {
+		t.Fatalf("got %+v, want only the root package", projects)
+	}
+}
+
+// TestDetectMonorepoMembers is the workspace case from the spec: every
+// member package is its own analyzable unit, found by the same recursive
+// walk rather than by parsing the workspaces globs.
+func TestDetectMonorepoMembers(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"name":"mono","workspaces":["packages/*"]}`), 0o644)
+	for _, name := range []string{"a", "b"} {
+		dir := filepath.Join(root, "packages", name)
+		os.MkdirAll(dir, 0o755)
+		os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name":"`+name+`"}`), 0o644)
+	}
+
+	projects, _, err := Detect(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 3 {
+		t.Fatalf("got %d projects, want 3 (root + 2 members): %+v", len(projects), projects)
+	}
+	var paths []string
+	for _, p := range projects {
+		if p.Language != "js" {
+			t.Errorf("project %q language = %q, want js", p.Path, p.Language)
+		}
+		paths = append(paths, p.Path)
+	}
+	sort.Strings(paths)
+	want := []string{root, filepath.Join(root, "packages", "a"), filepath.Join(root, "packages", "b")}
+	sort.Strings(want)
+	if !reflect.DeepEqual(paths, want) {
+		t.Errorf("paths = %v, want %v", paths, want)
+	}
+}
+
+// TestDetectGoAndJSInSameDir: a repo whose root holds both a Go module and a
+// package.json (a Go service with a JS build pipeline) is both projects, so
+// both toolchains run against it.
+func TestDetectGoAndJSInSameDir(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "go.mod"), []byte("module svc\n"), 0o644)
+	os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"name":"svc-ui"}`), 0o644)
+
+	projects, _, err := Detect(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 2 {
+		t.Fatalf("got %d projects, want 2: %+v", len(projects), projects)
 	}
 }
