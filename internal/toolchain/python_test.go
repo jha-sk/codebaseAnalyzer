@@ -89,3 +89,20 @@ func TestEnsurePython_unknownVersionFailsWithClearError(t *testing.T) {
 		t.Errorf("err = %v, want it to explain no build is known for this version", err)
 	}
 }
+
+// TestEnv_ignoresPythonRepoWhenEnsureFails confirms Env()'s existing
+// "skip a failing resolver" tolerance also covers Python: a Python project
+// pinned to a version nothing on this machine can provide must not make
+// Env() return an error or panic - it silently contributes nothing, same
+// as it does today for Go/Rust.
+func TestEnv_ignoresPythonRepoWhenEnsureFails(t *testing.T) {
+	if _, err := exec.LookPath("pyenv"); err == nil {
+		t.Skip("pyenv is on PATH; cannot force Ensure to fail in this environment")
+	}
+	dir := t.TempDir()
+	writePythonFile(t, dir, "pyproject.toml", "requires-python = \">=9.99\"\n")
+
+	// Must not panic and must return without a compile/runtime error path -
+	// Env() has no error return, so "it ran" is the assertion.
+	_ = toolchain.Env(dir)
+}

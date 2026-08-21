@@ -19,9 +19,10 @@ type Resolver interface {
 	Ensure(version string) (env []string, err error)
 }
 
-// resolvers is every language this build knows about. Go and Rust ship in
-// v1; the interface above is what keeps adding a third from being a rewrite.
-var resolvers = []Resolver{Go{}, Rust{}}
+// resolvers is every language this build knows about. Go, Rust and Python
+// ship in v1(+Python addition); the interface above is what keeps adding a
+// fourth from being a rewrite.
+var resolvers = []Resolver{Go{}, Rust{}, Python{}}
 
 // Env returns the extra environment for running tools against repoPath. A
 // repository that declares nothing gets an empty environment: falling back to
