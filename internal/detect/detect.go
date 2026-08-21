@@ -10,7 +10,7 @@ import (
 
 type Project struct {
 	Path     string
-	Language string // "go", "rust", "js", "ts" or "python"
+	Language string // "go", "rust", "js", "ts", "python" or "java"
 }
 
 // skipDirs are directory names the walk never descends into: VCS metadata,
@@ -48,6 +48,7 @@ var skipDirs = map[string]bool{
 	"__pycache__":  true,
 	".mypy_cache":  true,
 	".ruff_cache":  true,
+	".gradle":      true,
 }
 
 // Detect walks root for go.mod / Cargo.toml / package.json / Python manifests,
@@ -103,6 +104,15 @@ func Detect(root string) ([]Project, []string, error) {
 			// present, were already visited and are on disk to check for.
 			if !hasFile(dir, "pyproject.toml") && !hasFile(dir, "requirements.txt") {
 				projects = append(projects, Project{Path: dir, Language: "python"})
+			}
+		case "pom.xml":
+			projects = append(projects, Project{Path: dir, Language: "java"})
+		case "build.gradle", "build.gradle.kts":
+			// Only add if pom.xml doesn't already claim this directory — same
+			// dedup pattern requirements.txt uses against pyproject.toml. A
+			// directory carrying both is treated as Maven-primary.
+			if !hasFile(dir, "pom.xml") {
+				projects = append(projects, Project{Path: dir, Language: "java"})
 			}
 		}
 		return nil

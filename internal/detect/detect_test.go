@@ -390,3 +390,117 @@ func TestDetectPythonFixture(t *testing.T) {
 		t.Fatalf("got %+v, want exactly one python project", projects)
 	}
 }
+
+func TestDetectJava_pomXmlOnly(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "pom.xml"), []byte("<project></project>"), 0o644)
+
+	projects, _, err := Detect(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 || projects[0].Language != "java" {
+		t.Fatalf("got %+v, want exactly one java project", projects)
+	}
+}
+
+func TestDetectJava_buildGradleOnly(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "build.gradle"), []byte(""), 0o644)
+
+	projects, _, err := Detect(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 || projects[0].Language != "java" {
+		t.Fatalf("got %+v, want exactly one java project", projects)
+	}
+}
+
+func TestDetectJava_buildGradleKtsOnly(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "build.gradle.kts"), []byte(""), 0o644)
+
+	projects, _, err := Detect(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 || projects[0].Language != "java" {
+		t.Fatalf("got %+v, want exactly one java project", projects)
+	}
+}
+
+// TestDetectJava_pomAndBuildGradleDedup covers a directory carrying both a
+// pom.xml and a build.gradle (an unusual but real migration-in-progress
+// state) — must yield exactly ONE Project, Maven-primary, not two.
+func TestDetectJava_pomAndBuildGradleDedup(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "pom.xml"), []byte("<project></project>"), 0o644)
+	os.WriteFile(filepath.Join(root, "build.gradle"), []byte(""), 0o644)
+
+	projects, _, err := Detect(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 {
+		t.Fatalf("got %d projects, want exactly 1 (pom.xml + build.gradle in one dir must dedup): %+v", len(projects), projects)
+	}
+}
+
+// TestDetectJava_multiModuleMaven covers the spec's "each child module is
+// treated as its own analyzable unit" requirement: a parent pom.xml plus a
+// child module's own pom.xml under it must surface as two separate
+// Projects, with no special <modules>-parsing needed in detect itself —
+// WalkDir already visits each module's own pom.xml independently, the same
+// way a root package.json plus member package.json files already surface
+// as separate Projects for JS/TS workspaces.
+func TestDetectJava_multiModuleMaven(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "pom.xml"), []byte("<project><modules><module>module-a</module></modules></project>"), 0o644)
+	os.MkdirAll(filepath.Join(root, "module-a"), 0o755)
+	os.WriteFile(filepath.Join(root, "module-a", "pom.xml"), []byte("<project></project>"), 0o644)
+
+	projects, _, err := Detect(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 2 {
+		t.Fatalf("got %d projects, want 2 (parent + module-a): %+v", len(projects), projects)
+	}
+	for _, p := range projects {
+		if p.Language != "java" {
+			t.Errorf("project %+v has Language %q, want \"java\"", p, p.Language)
+		}
+	}
+}
+
+func TestDetectSkipsJavaGeneratedDirs(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "pom.xml"), []byte("<project></project>"), 0o644)
+	for _, dir := range []string{"target", "build", ".gradle"} {
+		full := filepath.Join(root, dir)
+		os.MkdirAll(full, 0o755)
+		os.WriteFile(filepath.Join(full, "pom.xml"), []byte("<project></project>"), 0o644)
+	}
+
+	projects, _, err := Detect(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 || projects[0].Path != root {
+		t.Fatalf("got %+v, want only the root project", projects)
+	}
+}
+
+func TestDetectJavaMavenFixture(t *testing.T) {
+	projects, skipped, err := Detect("../../testdata/fixtures/java-maven-repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skipped) != 0 {
+		t.Errorf("skipped = %v, want none", skipped)
+	}
+	if len(projects) != 2 {
+		t.Fatalf("got %+v, want 2 java projects (parent + module-a)", projects)
+	}
+}
