@@ -294,3 +294,99 @@ func TestJSLanguage_PermissionDeniedTsconfigNotTreatedAsAbsent(t *testing.T) {
 		t.Errorf("jsLanguage(permission-denied dir) = %q, want %q (must not silently downgrade to js)", got, "ts")
 	}
 }
+
+func TestDetectPython_pyprojectOnly(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "pyproject.toml"), []byte("[project]\nname = \"x\"\n"), 0o644)
+
+	projects, _, err := Detect(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 || projects[0].Language != "python" {
+		t.Fatalf("got %+v, want exactly one python project", projects)
+	}
+}
+
+// TestDetectPython_multipleManifestsInSameDirDedup covers the common real
+// case: a Poetry/PEP621 project also ships a frozen requirements.txt for
+// deployment. Both files in the same directory must yield exactly ONE
+// Project, not two - a naive independent-case-per-filename switch would
+// double-run every Python tool against the same directory.
+func TestDetectPython_multipleManifestsInSameDirDedup(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "pyproject.toml"), []byte("[project]\nname = \"x\"\n"), 0o644)
+	os.WriteFile(filepath.Join(root, "requirements.txt"), []byte("requests==2.31.0\n"), 0o644)
+
+	projects, _, err := Detect(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 {
+		t.Fatalf("got %d projects, want exactly 1 (pyproject.toml + requirements.txt in one dir must dedup): %+v", len(projects), projects)
+	}
+}
+
+// TestDetectPython_requirementsAndSetupPyDedup: without a pyproject.toml,
+// requirements.txt still wins over setup.py per the same priority order.
+func TestDetectPython_requirementsAndSetupPyDedup(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "requirements.txt"), []byte("requests==2.31.0\n"), 0o644)
+	os.WriteFile(filepath.Join(root, "setup.py"), []byte("from setuptools import setup\nsetup(name='x')\n"), 0o644)
+
+	projects, _, err := Detect(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 {
+		t.Fatalf("got %d projects, want exactly 1: %+v", len(projects), projects)
+	}
+}
+
+func TestDetectPython_setupPyOnly(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "setup.py"), []byte("from setuptools import setup\nsetup(name='x')\n"), 0o644)
+
+	projects, _, err := Detect(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 || projects[0].Language != "python" {
+		t.Fatalf("got %+v, want exactly one python project", projects)
+	}
+}
+
+// TestDetectSkipsPythonGeneratedDirs covers the spec's excluded paths for
+// Python: .venv/venv/__pycache__/.mypy_cache/.ruff_cache (exact-match) and
+// *.egg-info (suffix match, since egg-info directory names are
+// package-name-prefixed and vary per project).
+func TestDetectSkipsPythonGeneratedDirs(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "pyproject.toml"), []byte("[project]\nname = \"x\"\n"), 0o644)
+	for _, dir := range []string{".venv", "venv", "__pycache__", ".mypy_cache", ".ruff_cache", "mypkg.egg-info"} {
+		full := filepath.Join(root, dir)
+		os.MkdirAll(full, 0o755)
+		os.WriteFile(filepath.Join(full, "pyproject.toml"), []byte("[project]\nname = \"junk\"\n"), 0o644)
+	}
+
+	projects, _, err := Detect(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 || projects[0].Path != root {
+		t.Fatalf("got %+v, want only the root project", projects)
+	}
+}
+
+func TestDetectPythonFixture(t *testing.T) {
+	projects, skipped, err := Detect("../../testdata/fixtures/python-repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skipped) != 0 {
+		t.Errorf("skipped = %v, want none", skipped)
+	}
+	if len(projects) != 1 || projects[0].Language != "python" {
+		t.Fatalf("got %+v, want exactly one python project", projects)
+	}
+}
