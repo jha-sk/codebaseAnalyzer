@@ -1,0 +1,20 @@
+{
+  "dependencies": [
+    {
+      "name": "requests",
+      "version": "2.6.0",
+      "vulns": [
+        {
+          "id": "PYSEC-2018-28",
+          "fix_versions": ["2.20.0"],
+          "description": "requests before 2.20.0 sends an HTTP header with an authentication token, which allows attackers to obtain the token via netcat."
+        }
+      ]
+    },
+    {
+      "name": "flask",
+      "version": "2.0.0",
+      "vulns": []
+    }
+  ]
+}
