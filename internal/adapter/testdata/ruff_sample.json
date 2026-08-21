@@ -1,0 +1,22 @@
+[
+  {
+    "code": "F401",
+    "filename": "/repo/bad.py",
+    "message": "`os` imported but unused",
+    "location": {"row": 1, "column": 8},
+    "end_location": {"row": 1, "column": 10},
+    "fix": null,
+    "url": "https://docs.astral.sh/ruff/rules/unused-import",
+    "noqa_row": 1
+  },
+  {
+    "code": "S602",
+    "filename": "/repo/bad.py",
+    "message": "`subprocess` call with `shell=True` identified, security issue",
+    "location": {"row": 5, "column": 5},
+    "end_location": {"row": 5, "column": 40},
+    "fix": null,
+    "url": "https://docs.astral.sh/ruff/rules/subprocess-popen-with-shell-equals-true",
+    "noqa_row": 5
+  }
+]
