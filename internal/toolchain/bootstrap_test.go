@@ -66,3 +66,30 @@ func TestEnsureGoRejectsAChecksumMismatch(t *testing.T) {
 		t.Errorf("err = %v, want it to name the checksum mismatch", err)
 	}
 }
+
+func TestEnsureJDKReusesAnAlreadyExtractedToolchain(t *testing.T) {
+	cacheHome := t.TempDir()
+	t.Setenv("CODEBASE_ANALYSER_CACHE", cacheHome)
+
+	// Pre-populate the cache the way a previous run would have.
+	root := filepath.Join(cacheHome, "toolchains", "jdk", "21")
+	bin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	exe := filepath.Join(bin, "java")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// EnsureJDK with an empty jdkBuildAssets should fail, but we've already
+	// cached the binary, so it must return success without trying to download.
+	javaHome, err := toolchain.EnsureJDK("21")
+	if err != nil {
+		t.Fatalf("EnsureJDK on a warm cache: %v", err)
+	}
+	if javaHome != root {
+		t.Errorf("javaHome = %q, want %q", javaHome, root)
+	}
+}
+

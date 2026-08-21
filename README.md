@@ -1,6 +1,6 @@
 # codebase-analyser
 
-Production-safety static analysis for **Go**, **Rust**, **JavaScript** and **TypeScript** — as a CLI, as an MCP tool for coding agents, and as a self-hosted dashboard for tracking a repo's health over time.
+Production-safety static analysis for **Go**, **Rust**, **JavaScript**, **TypeScript** and **Python** — as a CLI, as an MCP tool for coding agents, and as a self-hosted dashboard for tracking a repo's health over time.
 
 It does not invent its own linters. It detects every project in a tree, runs the ecosystem-standard tools against each one, normalises their output into a single severity/category model, caches per package so a fix-and-recheck loop only re-lints what changed, and (optionally) has an LLM explain each finding class.
 
@@ -13,7 +13,7 @@ repo ──▶ detect ──▶ run tools ──▶ normalise ──▶ cache �
 
 | | |
 |---|---|
-| **Languages** | Go, Rust, JavaScript, TypeScript |
+| **Languages** | Go, Rust, JavaScript, TypeScript, Python |
 | **Categories** | `correctness` · `concurrency` · `security` · `operational` |
 | **Severities** | `critical` · `high` · `medium` · `low` |
 | **Surfaces** | `analyser` CLI · `codebase-analyser-mcp` MCP server · `dashboard` web app |
@@ -42,8 +42,9 @@ repo ──▶ detect ──▶ run tools ──▶ normalise ──▶ cache �
 | Rust | `Cargo.toml` | `clippy`, `cargo-audit` |
 | JavaScript | `package.json` | `eslint`, dependency audit (`npm`/`yarn`/`pnpm`) |
 | TypeScript | `package.json` + `tsconfig.json` | `eslint`, `tsc`, dependency audit |
+| Python | `pyproject.toml` / `requirements.txt` / `setup.py` | `ruff`, `mypy`, dependency audit (`pip-audit`) |
 
-A single repo can hold many projects, and one directory can be more than one project (a Go service with a JS build pipeline is both). Every one of them is analysed, concurrently. `.git`, `node_modules`, `vendor`, `target`, `testdata`, `dist`, `build`, `.next`, `out` and `coverage` are never descended into.
+A single repo can hold many projects, and one directory can be more than one project (a Go service with a JS build pipeline is both). Every one of them is analysed, concurrently. `.git`, `node_modules`, `vendor`, `target`, `testdata`, `dist`, `build`, `.next`, `out`, `coverage`, `.venv`, `venv`, `__pycache__`, `.mypy_cache`, `.ruff_cache` and `*.egg-info` are never descended into.
 
 **Missing tools are installed on demand.** Go and Rust toolchains are downloaded and verified into the analyser's own cache directory; JS tooling is `npm install`ed into a private, pinned tool directory — never into your repo's `node_modules`, never globally. This is why the first run on a fresh machine can take several minutes and later runs are fast.
 
@@ -58,6 +59,7 @@ A single repo can hold many projects, and one directory can be more than one pro
 | Go 1.26+ | building this repo | no |
 | Go toolchain | analysing Go projects | ✅ downloaded on demand |
 | Rust toolchain | analysing Rust projects | ✅ via rustup on demand |
+| Python 3 / pip | analysing Python projects | ✅ ruff/mypy/pip-audit installed into a private venv on demand |
 | **Node.js 20+ / npm** | analysing JS/TS projects | ❌ **must be on `PATH`** |
 | Docker + Compose | the dashboard | no |
 | PostgreSQL | the dashboard | ✅ via Compose |

@@ -22,7 +22,7 @@ type Resolver interface {
 // resolvers is every language this build knows about. Go, Rust and Python
 // ship in v1(+Python addition); the interface above is what keeps adding a
 // fourth from being a rewrite.
-var resolvers = []Resolver{Go{}, Rust{}, Python{}}
+var resolvers = []Resolver{Go{}, Rust{}, Python{}, Java{}}
 
 // Env returns the extra environment for running tools against repoPath. A
 // repository that declares nothing gets an empty environment: falling back to

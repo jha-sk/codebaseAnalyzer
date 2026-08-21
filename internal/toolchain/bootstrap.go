@@ -250,6 +250,97 @@ func EnsurePython(version string) (string, error) {
 	return root, nil
 }
 
+// jdkBuildAssets is a hand-maintained, single-entry-per-version table
+// (pinned, not floating — same style as pythonBuildAssets) mapping a JDK
+// major version to its downloadable Eclipse Temurin build asset for this
+// OS/arch. ponytail: ships empty here, the same gap pythonBuildAssets
+// documents — real Temurin release URLs and checksums need verifying
+// against the live Adoptium API before this table is useful, not done
+// here. Any version not in this table returns a clear error instead of a
+// best-effort download; Env() already tolerates a failing Ensure by
+// skipping that resolver (falls back to any JDK already on PATH). Upgrade
+// path: populate real entries (or fetch Adoptium's release-index API at
+// runtime) once verified — see Task 1 follow-up in the Java implementation
+// plan for the exact verification commands.
+var jdkBuildAssets = map[string]struct{ url, sumURL string }{}
+
+// EnsureJDK returns JAVA_HOME of a JDK we manage ourselves, downloading and
+// extracting it on first use. The user's own Java install is never
+// touched. Mirrors EnsureGo/EnsurePython, except the archive's top-level
+// directory name varies by Temurin build (e.g. "jdk-21.0.5+11") rather
+// than being a known constant like Go's "go" — firstSubdir finds it after
+// extraction instead of hardcoding it.
+func EnsureJDK(version string) (string, error) {
+	dir, err := toolchainsDir()
+	if err != nil {
+		return "", err
+	}
+	root := filepath.Join(dir, "jdk", version)
+	javaBin := filepath.Join(root, "bin", exeName("java"))
+	if isExecutable(javaBin) {
+		return root, nil
+	}
+
+	asset, ok := jdkBuildAssets[version]
+	if !ok {
+		return "", fmt.Errorf("no bootstrap build known for JDK %s (install sdkman, or a matching system JDK on PATH, to use this version)", version)
+	}
+
+	unlock, err := lock(dir, "jdk-"+version)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	if isExecutable(javaBin) {
+		return root, nil
+	}
+
+	fmt.Fprintf(os.Stderr, "codebase-analyser: downloading JDK %s (first run only)...\n", version)
+	archive, err := download(asset.url, asset.sumURL)
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(archive)
+
+	staging := root + ".staging"
+	os.RemoveAll(staging)
+	if err := extractTarGz(archive, staging); err != nil {
+		os.RemoveAll(staging)
+		return "", err
+	}
+	sub, err := firstSubdir(staging)
+	if err != nil {
+		os.RemoveAll(staging)
+		return "", err
+	}
+	os.RemoveAll(root)
+	if err := os.MkdirAll(filepath.Dir(root), 0o755); err != nil {
+		return "", err
+	}
+	if err := os.Rename(filepath.Join(staging, sub), root); err != nil {
+		return "", err
+	}
+	os.RemoveAll(staging)
+	fmt.Fprintf(os.Stderr, "codebase-analyser: JDK %s ready\n", version)
+	return root, nil
+}
+
+// firstSubdir returns the name of dir's one subdirectory — used to unwrap
+// an archive's single top-level folder whose exact name (Temurin embeds
+// the full version+build string) isn't known ahead of time.
+func firstSubdir(dir string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			return e.Name(), nil
+		}
+	}
+	return "", fmt.Errorf("%s: no subdirectory found after extraction", dir)
+}
+
 func rustTargetTriple() (string, error) {
 	switch runtime.GOOS + "/" + runtime.GOARCH {
 	case "linux/amd64":
