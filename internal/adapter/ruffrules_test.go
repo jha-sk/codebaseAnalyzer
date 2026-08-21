@@ -21,7 +21,13 @@ func TestClassifyRuffCode(t *testing.T) {
 		{"unused import is low correctness", "F401", finding.CategoryCorrectness, finding.SeverityLow},
 		{"unknown security-family code keeps the category", "S999", finding.CategorySecurity, finding.SeverityMedium},
 		{"unknown pyflakes-family code keeps the category", "F999", finding.CategoryCorrectness, finding.SeverityMedium},
-		{"totally unknown prefix defaults to correctness/medium", "PLW1510", finding.CategoryCorrectness, finding.SeverityMedium},
+		{"bare assert is a correctness nit, not a vulnerability", "S101", finding.CategoryCorrectness, finding.SeverityLow},
+		{"unknown isort-family code is low correctness", "I001", finding.CategoryCorrectness, finding.SeverityLow},
+		{"unknown pyupgrade-family code is low correctness", "UP007", finding.CategoryCorrectness, finding.SeverityLow},
+		{"unknown pydocstyle-family code is low correctness", "D103", finding.CategoryCorrectness, finding.SeverityLow},
+		{"implicit-str-concat family is its own family, not isort", "ISC001", finding.CategoryCorrectness, finding.SeverityLow},
+		{"totally unknown family defaults to correctness/medium", "PLW1510", finding.CategoryCorrectness, finding.SeverityMedium},
+		{"a family sharing a leading letter is not swallowed", "SIM115", finding.CategoryCorrectness, finding.SeverityMedium},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

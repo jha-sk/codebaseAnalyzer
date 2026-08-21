@@ -90,21 +90,43 @@ func (Python) Ensure(version string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []string{
-		"PATH=" + filepath.Join(root, "bin") + string(os.PathListSeparator) + os.Getenv("PATH"),
-	}, nil
+	return pythonEnv(root, version), nil
 }
 
 func ensureViaPyenv(version string) ([]string, error) {
-	if err := exec.Command("pyenv", "install", "--skip-existing", version).Run(); err != nil {
-		return nil, fmt.Errorf("pyenv install %s: %w", version, err)
+	// Check before install, the same order EnsureGo/EnsureRustup use
+	// (bootstrap.go): Ensure runs once per tool subprocess, so the common
+	// case (version already installed) must cost one fast `pyenv prefix`
+	// call, not an unconditional `pyenv install` on top of it.
+	prefix, err := pyenvPrefix(version)
+	if err != nil {
+		if err := exec.Command("pyenv", "install", "--skip-existing", version).Run(); err != nil {
+			return nil, fmt.Errorf("pyenv install %s: %w", version, err)
+		}
+		if prefix, err = pyenvPrefix(version); err != nil {
+			return nil, err
+		}
 	}
+	return pythonEnv(prefix, version), nil
+}
+
+func pyenvPrefix(version string) (string, error) {
 	out, err := exec.Command("pyenv", "prefix", version).Output()
 	if err != nil {
-		return nil, fmt.Errorf("pyenv prefix %s: %w", version, err)
+		return "", fmt.Errorf("pyenv prefix %s: %w", version, err)
 	}
-	prefix := strings.TrimSpace(string(out))
+	return strings.TrimSpace(string(out)), nil
+}
+
+// pythonEnv is what both Ensure branches hand back: the resolved
+// interpreter's bin directory ahead of PATH, plus the resolved version as a
+// marker variable. The marker is what makes the resolution observable -
+// adapter.Mypy reads it back out of EnvForPath to pass --python-version, so
+// a repo is type-checked at the version it declares. Riding the existing
+// env-var channel keeps that at zero new plumbing.
+func pythonEnv(root, version string) []string {
 	return []string{
-		"PATH=" + filepath.Join(prefix, "bin") + string(os.PathListSeparator) + os.Getenv("PATH"),
-	}, nil
+		"PATH=" + filepath.Join(root, "bin") + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"CODEBASE_ANALYSER_PYTHON_VERSION=" + version,
+	}
 }

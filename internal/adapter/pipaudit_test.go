@@ -9,30 +9,47 @@ import (
 	"codebase-analyser/internal/finding"
 )
 
-func TestDetectPipManifest(t *testing.T) {
+// TestPipAuditRun_unsupportedLockfilesReportAClearSkip covers the spec's
+// "skipped tool, with a reason" contract for every dependency manifest
+// pip-audit cannot read in v1 (the Pipenv case has its own test below).
+// poetry.lock/uv.lock used to be dispatched to
+// a real pip-audit invocation with no -r flag, which audits the analyser's
+// OWN venv rather than the repo - a false negative and a false positive at
+// once. They must be named skips instead.
+func TestPipAuditRun_unsupportedLockfilesReportAClearSkip(t *testing.T) {
 	tests := []struct {
-		name         string
-		files        []string
-		wantManifest string
-		wantDashR    bool
+		file string
+		want string
 	}{
-		{"requirements.txt only", []string{"requirements.txt"}, "requirements.txt", true},
-		{"poetry.lock only", []string{"poetry.lock"}, "poetry.lock", false},
-		{"uv.lock only", []string{"uv.lock"}, "uv.lock", false},
-		{"requirements.txt wins over poetry.lock", []string{"requirements.txt", "poetry.lock"}, "requirements.txt", true},
-		{"none present", nil, "", false},
+		{"poetry.lock", "poetry.lock"},
+		{"uv.lock", "uv.lock"},
 	}
 	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tc.file, func(t *testing.T) {
 			dir := t.TempDir()
-			for _, f := range tc.files {
-				os.WriteFile(filepath.Join(dir, f), []byte(""), 0o644)
+			os.WriteFile(filepath.Join(dir, tc.file), []byte(""), 0o644)
+
+			_, err := PipAudit{}.Run(dir)
+			if err == nil {
+				t.Fatalf("err = nil, want an error naming the unsupported %s", tc.file)
 			}
-			manifest, dashR := detectPipManifest(dir)
-			if manifest != tc.wantManifest || dashR != tc.wantDashR {
-				t.Errorf("detectPipManifest = (%q, %v), want (%q, %v)", manifest, dashR, tc.wantManifest, tc.wantDashR)
+			if got := err.Error(); !strings.Contains(got, tc.want) {
+				t.Errorf("err = %q, want it to mention %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// A requirements.txt alongside an unsupported lockfile is still scanned: the
+// lockfile skips only apply when there is no requirements.txt to read.
+func TestPipAuditRun_requirementsTxtWinsOverAnUnsupportedLockfile(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte(""), 0o644)
+	os.WriteFile(filepath.Join(dir, "poetry.lock"), []byte(""), 0o644)
+
+	_, err := PipAudit{}.Run(dir)
+	if err != nil && strings.Contains(err.Error(), "poetry.lock") {
+		t.Errorf("err = %q, want no poetry.lock skip when requirements.txt is present", err)
 	}
 }
 
@@ -88,5 +105,36 @@ func TestPipAuditFindings(t *testing.T) {
 	}
 	if f.Tool != "pip-audit" {
 		t.Errorf("Tool = %q, want pip-audit", f.Tool)
+	}
+}
+
+// pip-audit gets exactly one invocation shape, and every flag in it is
+// load-bearing: -r reads the repo's manifest (without it pip-audit audits the
+// analyser's own venv), --no-deps + --disable-pip together stop it from
+// pip-installing - and so executing - the analysed repo's dependency code.
+func TestPipAuditArgs(t *testing.T) {
+	want := []string{"-r", "requirements.txt", "--no-deps", "--disable-pip", "--format", "json"}
+	got := pipAuditArgs("requirements.txt")
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("pipAuditArgs() = %v, want %v", got, want)
+	}
+}
+
+// --disable-pip's price: every requirement must be pinned with ==. pip-audit
+// hard-fails on an unpinned line, which must surface as the same named,
+// actionable skip as an unsupported lockfile - not a generic "exited 1".
+func TestPipAuditRun_unpinnedRequirementReportsAClearSkip(t *testing.T) {
+	if !(PipAudit{}).CheckInstalled() {
+		t.Skip("pip-audit not installed; this test needs the real binary's unpinned-requirement error")
+	}
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte("requests\n"), 0o644)
+
+	_, err := PipAudit{}.Run(dir)
+	if err == nil {
+		t.Fatal("err = nil, want an error naming the unpinned requirement")
+	}
+	if got := err.Error(); !strings.Contains(got, "unpinned requirement") || !strings.Contains(got, "==") {
+		t.Errorf("err = %q, want the actionable 'pin every line with ==' skip", got)
 	}
 }

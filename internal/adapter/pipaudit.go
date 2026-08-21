@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"codebase-analyser/internal/finding"
 )
@@ -18,54 +19,76 @@ func (PipAudit) Name() string         { return "pip-audit" }
 func (PipAudit) CheckInstalled() bool { return isExecutable(pinnedPyBin("pip-audit")) }
 func (PipAudit) Install() error       { return installPyTools() }
 
-// pipManifestPriority is checked in this order: requirements.txt first,
-// since it's the lowest-common-denominator format pip-audit reads natively
-// via -r; poetry.lock and uv.lock require pip-audit's own native lockfile
-// support (no -r flag - it discovers them from the working directory).
-var pipManifestPriority = []struct {
-	file     string
-	useDashR bool
-}{
-	{"requirements.txt", true},
-	{"poetry.lock", false},
-	{"uv.lock", false},
+// pipUnsupportedLocks are dependency-manifest formats a Python project may
+// carry that pip-audit cannot read in v1, each with the reason surfaced as a
+// named skip. Checked in this order, after requirements.txt.
+//
+// Running pip-audit anyway (no -r flag) is not an option: it then audits the
+// interpreter running it - the analyser's own tool venv - not the target
+// repo. That is simultaneously a false negative (the repo's real
+// dependencies are never scanned) and a false positive (ruff/mypy/pip-audit's
+// own transitive deps get attributed to the user's lockfile).
+var pipUnsupportedLocks = []struct{ file, reason string }{
+	{"poetry.lock", "poetry.lock-only project; pip-audit does not support Poetry's lockfile format natively in v1 - export a requirements.txt (e.g. `poetry export -f requirements.txt`) to enable dependency scanning"},
+	{"uv.lock", "uv.lock-only project; pip-audit does not support uv's lockfile format natively in v1 - export a requirements.txt (e.g. `uv export --format requirements-txt`) to enable dependency scanning"},
+	{"Pipfile.lock", "Pipenv-only project (Pipfile.lock present, no requirements.txt/poetry.lock/uv.lock); dependency scanning is not supported for Pipenv projects in v1"},
 }
 
-// detectPipManifest reports which supported manifest (if any) is present
-// directly in dir, and whether pip-audit needs -r <file> to read it.
-func detectPipManifest(dir string) (manifest string, useDashR bool) {
-	for _, m := range pipManifestPriority {
-		if _, err := os.Stat(filepath.Join(dir, m.file)); err == nil {
-			return m.file, m.useDashR
-		}
-	}
-	return "", false
+func pipFileExists(dir, name string) bool {
+	_, err := os.Stat(filepath.Join(dir, name))
+	return err == nil
+}
+
+// pipAuditArgs is the one invocation pip-audit ever gets, kept separate from
+// the run so its exact shape is assertable in a unit test.
+//
+// --no-deps audits exactly the lines requirements.txt pins instead of
+// resolving the transitive tree, and --disable-pip stops pip-audit from
+// creating a temp venv and running a real `pip install -r` to do that
+// resolution. Both are needed: verified live on pip-audit 2.9.0 that
+// --no-deps ALONE still installs transitive deps and still executes a local
+// package's setup.py. Together they are the spec's "no dependency
+// installation" containment rule - a Python package can run arbitrary code at
+// install time via setup.py, and an analysed repo is untrusted input.
+//
+// The cost is that --disable-pip requires every requirement pinned with ==;
+// Run turns pip-audit's error for an unpinned line into a named skip.
+func pipAuditArgs(manifest string) []string {
+	return []string{"-r", manifest, "--no-deps", "--disable-pip", "--format", "json"}
 }
 
 func (PipAudit) Run(path string) ([]finding.Finding, error) {
-	manifest, useDashR := detectPipManifest(path)
-	if manifest == "" {
-		// None of the 3 supported manifests. A Pipfile.lock specifically
-		// means there IS a dependency set, just one pip-audit can't read in
-		// v1 - report it as a named, actionable skip (spec: "reports
-		// dependency-scanning as skipped, with a clear reason — not
-		// silently absent"), mirroring jsaudit.go's error-vs-silence split.
-		if _, err := os.Stat(filepath.Join(path, "Pipfile.lock")); err == nil {
-			return nil, fmt.Errorf("pip-audit: Pipenv-only project (Pipfile.lock present, no requirements.txt/poetry.lock/uv.lock); dependency scanning is not supported for Pipenv projects in v1")
+	// requirements.txt is the only format pip-audit reads directly (-r).
+	const manifest = "requirements.txt"
+	if !pipFileExists(path, manifest) {
+		for _, l := range pipUnsupportedLocks {
+			// There IS a dependency set here, just one pip-audit can't read -
+			// report it as a named, actionable skip (spec: "reports
+			// dependency-scanning as skipped, with a clear reason - not
+			// silently absent"), mirroring jsaudit.go's error-vs-silence split.
+			if pipFileExists(path, l.file) {
+				return nil, fmt.Errorf("pip-audit: %s", l.reason)
+			}
 		}
 		// No manifest of any kind: nothing to audit, healthy silence.
 		return nil, nil
 	}
 
 	bin := pinnedPyBin("pip-audit")
-	var out []byte
-	var err error
-	if useDashR {
-		out, err = runCommand(path, bin, "-r", manifest, "--format", "json")
-	} else {
-		out, err = runCommand(path, bin, "--format", "json")
-	}
+	out, err := runCommand(path, bin, pipAuditArgs(manifest)...)
 	if err != nil {
+		// --disable-pip only works on a fully pinned requirements.txt; an
+		// unpinned line makes pip-audit hard-fail with an empty stdout. Turn
+		// that into the same named, actionable skip as the unsupported
+		// lockfiles above rather than a generic "tool exited 1".
+		//
+		// Matched on the shorter "is not pinned": pip-audit 2.9.0 emits both
+		// "requirement X is not pinned:" (no version at all) and "... is not
+		// pinned to an exact version:" (a >= range), and both mean the same
+		// thing here. runCommand carries pip-audit's stderr into err.
+		if strings.Contains(err.Error(), "is not pinned") {
+			return nil, fmt.Errorf("pip-audit: requirements.txt contains an unpinned requirement; --disable-pip (required for containment) needs every line pinned to an exact version (==) - pin all dependencies to enable dependency scanning")
+		}
 		return nil, fmt.Errorf("pip-audit: %w", err)
 	}
 	findings, err := pipAuditFindings(out)

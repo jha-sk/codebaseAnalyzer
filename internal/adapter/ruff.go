@@ -25,11 +25,32 @@ func (Ruff) Run(path string) ([]finding.Finding, error) {
 	// contradicting the "no separate Bandit invocation" design intent.
 	// --extend-select (not --select) is what preserves the rest of a
 	// repo's own selection instead of replacing it.
-	out, err := runCommand(path, bin, "check", "--output-format", "json", "--extend-select", "S", ".")
+	args := []string{"check", "--output-format", "json", "--extend-select", "S"}
+	args = append(args, ruffExcludeArgs()...)
+	args = append(args, ".")
+	out, err := runCommand(path, bin, args...)
 	if err != nil {
 		return nil, fmt.Errorf("ruff: %w", err)
 	}
 	return ruffFindings(out)
+}
+
+// ruffExcludeArgs keeps ruff out of the generated/vendored trees in
+// pyExcludedDirs, mirroring how eslint.go appends one --ignore-pattern per
+// jsExcludedDirs entry. --extend-exclude (not --exclude) is required: ruff's
+// plain --exclude REPLACES both its own built-in default excludes and the
+// repo's own [tool.ruff] exclude config, so a repo that explicitly excludes
+// e.g. "vendor" would have it silently linted again - confirmed live.
+// --extend-exclude adds to whatever's already excluded instead, the same
+// "don't clobber the repo's own config" reasoning --extend-select S already
+// applies above. *.egg-info is added here as a glob because it is a suffix
+// pattern rather than a fixed directory name.
+func ruffExcludeArgs() []string {
+	args := make([]string, 0, 2*(len(pyExcludedDirs)+1))
+	for _, dir := range pyExcludedDirs {
+		args = append(args, "--extend-exclude", dir)
+	}
+	return append(args, "--extend-exclude", "*.egg-info")
 }
 
 type ruffLocation struct {

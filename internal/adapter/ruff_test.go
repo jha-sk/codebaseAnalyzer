@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"codebase-analyser/internal/finding"
@@ -47,5 +48,21 @@ func TestRuffFindings(t *testing.T) {
 	}
 	if shell.Line != 5 {
 		t.Errorf("S602 Line = %d, want 5", shell.Line)
+	}
+}
+
+// The generated/vendored trees in pyExcludedDirs must reach ruff as
+// --extend-exclude globs (mirroring eslint.go's --ignore-pattern loop);
+// without them ruff lints build/ and *.egg-info copies of the source and
+// reports every finding twice. The flag NAME is asserted exactly:
+// --exclude would REPLACE ruff's own defaults and the repo's own
+// [tool.ruff] exclude list instead of adding to them.
+func TestRuffExcludeArgs(t *testing.T) {
+	var want []string
+	for _, glob := range append(append([]string{}, pyExcludedDirs...), "*.egg-info") {
+		want = append(want, "--extend-exclude", glob)
+	}
+	if got := ruffExcludeArgs(); strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("ruffExcludeArgs() = %v, want %v", got, want)
 	}
 }

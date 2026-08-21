@@ -110,3 +110,13 @@ func doInstallPyTools() error {
 	}
 	return nil
 }
+
+// pyExcludedDirs are the generated/vendored/cache trees excluded from every
+// Python scan; left in, a stale build/ directory's duplicate module copies
+// can make mypy abort with a project-level error instead of type-checking
+// anything (see mypyProjectDiagLine in mypy.go), and ruff reports every
+// finding twice - once against the source, once against its generated copy.
+// Mirrors jsExcludedDirs (js.go). *.egg-info is a suffix pattern, so it is
+// appended as a glob/regex by each tool's own exclude builder rather than
+// listed here.
+var pyExcludedDirs = []string{".venv", "venv", "__pycache__", ".mypy_cache", ".ruff_cache", "build", "dist"}
