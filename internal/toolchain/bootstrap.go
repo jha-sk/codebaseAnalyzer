@@ -182,6 +182,74 @@ func EnsureRustup() (string, error) {
 	return home, nil
 }
 
+// pythonBuildAssets is a hand-maintained, single-entry table (pinned, not
+// floating - same style as adapter.jsPinnedPackages) mapping a Python
+// version to its downloadable standalone-build asset. ponytail: only
+// pythonLatestStable is populated. A general per-version download needs a
+// real upstream release-asset naming/checksum scheme (python-build-standalone
+// is the closest real-world precedent, also used by uv/rye for this exact
+// job) verified against the live API - not done here. Rather than guess at
+// an unverified network API, any version not in this table returns a clear
+// error instead of a best-effort download; Env() already tolerates a
+// failing Ensure by skipping that resolver. Upgrade path: populate more
+// entries (or replace this table with a fetched release index) once the
+// real API is verified.
+var pythonBuildAssets = map[string]struct{ url, sumURL string }{}
+
+// EnsurePython returns the root of a Python install we manage ourselves
+// (root/bin/python3), downloading and extracting it on first use. The
+// user's own Python install is never touched. Mirrors EnsureGo/EnsureRustup
+// exactly, reusing the same download/extract/lock machinery - see the
+// caveat on pythonBuildAssets above for the one real gap.
+func EnsurePython(version string) (string, error) {
+	asset, ok := pythonBuildAssets[version]
+	if !ok {
+		return "", fmt.Errorf("no bootstrap build known for Python %s (install pyenv, or a matching system python3, to use this version)", version)
+	}
+
+	dir, err := toolchainsDir()
+	if err != nil {
+		return "", err
+	}
+	root := filepath.Join(dir, "python", version)
+	pythonBin := filepath.Join(root, "bin", exeName("python3"))
+	if isExecutable(pythonBin) {
+		return root, nil
+	}
+
+	unlock, err := lock(dir, "python-"+version)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	if isExecutable(pythonBin) {
+		return root, nil
+	}
+
+	fmt.Fprintf(os.Stderr, "codebase-analyser: downloading Python %s (first run only)...\n", version)
+	archive, err := download(asset.url, asset.sumURL)
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(archive)
+
+	staging := root + ".staging"
+	os.RemoveAll(staging)
+	if err := extractTarGz(archive, staging); err != nil {
+		os.RemoveAll(staging)
+		return "", err
+	}
+	os.RemoveAll(root)
+	if err := os.MkdirAll(filepath.Dir(root), 0o755); err != nil {
+		return "", err
+	}
+	if err := os.Rename(staging, root); err != nil {
+		return "", err
+	}
+	fmt.Fprintf(os.Stderr, "codebase-analyser: Python %s ready\n", version)
+	return root, nil
+}
+
 func rustTargetTriple() (string, error) {
 	switch runtime.GOOS + "/" + runtime.GOARCH {
 	case "linux/amd64":

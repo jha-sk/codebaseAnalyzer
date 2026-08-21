@@ -1,7 +1,9 @@
 package toolchain
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -68,4 +70,41 @@ func isPythonProject(repoPath string) bool {
 		}
 	}
 	return false
+}
+
+// Ensure prefers pyenv, the reference implementation of the
+// .python-version convention Detect reads: `pyenv install --skip-existing`
+// fetches a missing version through pyenv's own build process - same
+// reasoning as Go's GOTOOLCHAIN and Rust's rustup, the ecosystem already
+// ships this machinery.
+//
+// With no pyenv on PATH, it falls back to EnsurePython, a Python we
+// download and manage ourselves. That fallback only knows a small, pinned
+// set of versions (pythonBuildAssets in bootstrap.go) - an unlisted version
+// fails clearly rather than guessing at a download URL.
+func (Python) Ensure(version string) ([]string, error) {
+	if _, err := exec.LookPath("pyenv"); err == nil {
+		return ensureViaPyenv(version)
+	}
+	root, err := EnsurePython(version)
+	if err != nil {
+		return nil, err
+	}
+	return []string{
+		"PATH=" + filepath.Join(root, "bin") + string(os.PathListSeparator) + os.Getenv("PATH"),
+	}, nil
+}
+
+func ensureViaPyenv(version string) ([]string, error) {
+	if err := exec.Command("pyenv", "install", "--skip-existing", version).Run(); err != nil {
+		return nil, fmt.Errorf("pyenv install %s: %w", version, err)
+	}
+	out, err := exec.Command("pyenv", "prefix", version).Output()
+	if err != nil {
+		return nil, fmt.Errorf("pyenv prefix %s: %w", version, err)
+	}
+	prefix := strings.TrimSpace(string(out))
+	return []string{
+		"PATH=" + filepath.Join(prefix, "bin") + string(os.PathListSeparator) + os.Getenv("PATH"),
+	}, nil
 }

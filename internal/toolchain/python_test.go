@@ -2,7 +2,9 @@ package toolchain_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"codebase-analyser/internal/toolchain"
@@ -58,5 +60,32 @@ func TestPythonDetect_fallsBackToLatestStable(t *testing.T) {
 	got, ok := toolchain.Python{}.Detect(dir)
 	if !ok || got == "" {
 		t.Errorf("Detect = (%q, %v), want a non-empty fallback version and ok=true", got, ok)
+	}
+}
+
+// No pyenv on PATH and version isn't in pythonBuildAssets: Ensure must fail
+// clearly rather than guess at a download, and Env() already tolerates a
+// failing Ensure by skipping that resolver (see toolchain.go's Env, tested
+// by the Go/Rust suites already - not re-tested here).
+func TestPythonEnsure_unknownVersionWithNoPyenvFailsClearly(t *testing.T) {
+	if _, err := exec.LookPath("pyenv"); err == nil {
+		t.Skip("pyenv is on PATH in this environment; this test covers the no-pyenv fallback path")
+	}
+	_, err := toolchain.Python{}.Ensure("9.99.99")
+	if err == nil {
+		t.Fatal("err = nil, want an error for an unpinned, unbootstrappable version")
+	}
+	if !strings.Contains(err.Error(), "9.99.99") {
+		t.Errorf("err = %v, want it to name the requested version", err)
+	}
+}
+
+func TestEnsurePython_unknownVersionFailsWithClearError(t *testing.T) {
+	_, err := toolchain.EnsurePython("9.99.99")
+	if err == nil {
+		t.Fatal("err = nil, want an error naming the unsupported version")
+	}
+	if !strings.Contains(err.Error(), "no bootstrap build known") {
+		t.Errorf("err = %v, want it to explain no build is known for this version", err)
 	}
 }
