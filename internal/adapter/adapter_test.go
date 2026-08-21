@@ -132,9 +132,12 @@ func TestOnlyPackageScopedAdaptersAreTargeted(t *testing.T) {
 	}
 	// Whole-dependency-set scanners, and tools with no sub-unit the cache's
 	// Unit model can express: ESLint lints a file tree rather than a package
-	// graph, tsc type-checks a whole program, and an audit reads one
-	// lockfile. None of them has anything smaller to be restricted to.
-	for _, a := range []ToolAdapter{Govulncheck{}, CargoAudit{}, ESLint{}, Tsc{}, JSAudit{}} {
+	// graph, tsc type-checks a whole program, an audit reads one lockfile,
+	// ruff lints a file tree (single-package only in v1, per spec), mypy
+	// type-checks a whole program via imports (same as tsc), and pip-audit
+	// reads one manifest. None of them has anything smaller to be
+	// restricted to.
+	for _, a := range []ToolAdapter{Govulncheck{}, CargoAudit{}, ESLint{}, Tsc{}, JSAudit{}, Ruff{}, Mypy{}, PipAudit{}} {
 		if _, ok := a.(Targeted); ok {
 			t.Errorf("%s implements Targeted but has no restrictable sub-unit", a.Name())
 		}

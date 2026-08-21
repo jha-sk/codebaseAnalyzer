@@ -29,6 +29,10 @@ var DefaultAdapters = map[string][]adapter.ToolAdapter{
 	// tsconfig.json is present for it to read.
 	"js": {adapter.ESLint{}, adapter.JSAudit{}},
 	"ts": {adapter.ESLint{}, adapter.Tsc{}, adapter.JSAudit{}},
+	// ruff covers both correctness and security (via --extend-select S);
+	// mypy runs unconditionally/best-effort per spec, regardless of how
+	// typed the codebase actually is; pip-audit covers dependency CVEs.
+	"python": {adapter.Ruff{}, adapter.Mypy{}, adapter.PipAudit{}},
 }
 
 // Cache lets Run serve part of a tool's work from a previous run. It is an
